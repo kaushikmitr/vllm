@@ -150,7 +150,7 @@ RUN mv vllm test_docs/
 #################### OPENAI API SERVER ####################
 # openai api server alternative
 FROM vllm-base AS vllm-openai
-RUN huggingface-cli login --token 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
+RUN huggingface-cli login --token HUGGING_FACE_HUB_TOKEN
 # install additional dependencies for openai api server
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install accelerate hf_transfer modelscope

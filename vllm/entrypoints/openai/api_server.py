@@ -150,9 +150,9 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
     custom_headers = {}
     if hasattr(generator, 'usage') and generator.usage:
         if generator.usage.active_lora_adapters is not None:
-            custom_headers["active_lora_adapters"] = json.dumps(generator.usage.active_lora_adapters, headers=custom_headers)
+            custom_headers["active_lora_adapters"] = json.dumps(generator.usage.active_lora_adapters)
         if generator.usage.pending_queue_size is not None:
-            custom_headers["pending_queue_size"] = str(generator.usage.pending_queue_size, headers=custom_headers)
+            custom_headers["pending_queue_size"] = str(generator.usage.pending_queue_size)
                 
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(),
