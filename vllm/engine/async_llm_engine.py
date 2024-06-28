@@ -254,8 +254,9 @@ class _AsyncLLMEngine(LLMEngine):
                 request.pending_queue_size = len(self.scheduler.waiting)     
                 active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
                 active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-                request.active_lora_adapters = dict(Counter(active_lora_adapters_lt))
-                request.active_lora_adapters.update({k: 0 for k in self.active_lora_adapters.keys()})
+                request.active_lora_adapters = {k: 0 for k in self.active_lora_adapters.keys()}
+                request.active_lora_adapters.update(dict(Counter(active_lora_adapters_lt)))
+
         
 
         if not request_outputs:
