@@ -3,6 +3,7 @@ import time
 from functools import partial
 from typing import (AsyncIterator, Callable, Dict, Iterable, List, Optional,
                     Set, Tuple, Type, Union)
+from collections import Counter
 
 from transformers import PreTrainedTokenizer
 
@@ -247,6 +248,15 @@ class _AsyncLLMEngine(LLMEngine):
 
         # Tracing
         self.do_tracing(scheduler_outputs)
+        
+        for request in request_outputs:
+            if request.finished:
+                request.pending_queue_size = len(self.scheduler.waiting)     
+                active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
+                active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
+                request.active_lora_adapters = dict(Counter(active_lora_adapters_lt))
+                request.active_lora_adapters.update({k: 0 for k in self.active_lora_adapters.keys()})
+        
 
         if not request_outputs:
             # Stop the execute model loop in parallel workers until there are
@@ -298,6 +308,9 @@ class _AsyncLLMEngine(LLMEngine):
                              "not enabled!")
         if arrival_time is None:
             arrival_time = time.time()
+            
+        if lora_request is not None:
+            self.active_lora_adapters[lora_request.lora_name] = 1
 
         processed_inputs = await self.process_model_inputs_async(
             request_id=request_id, inputs=inputs, lora_request=lora_request)

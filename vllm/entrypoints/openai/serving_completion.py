@@ -332,6 +332,9 @@ class OpenAIServingCompletion(OpenAIServing):
         choices: List[CompletionResponseChoice] = []
         num_prompt_tokens = 0
         num_generated_tokens = 0
+        active_lora_adapters = {}
+        pending_queue_size = 0
+        
         for final_res in final_res_batch:
             assert final_res is not None
             prompt_token_ids = final_res.prompt_token_ids
@@ -376,11 +379,15 @@ class OpenAIServingCompletion(OpenAIServing):
             num_prompt_tokens += len(prompt_token_ids)
             num_generated_tokens += sum(
                 len(output.token_ids) for output in final_res.outputs)
+            active_lora_adapters = final_res.active_lora_adapters
+            pending_queue_size = 0 if final_res.pending_queue_size is None else final_res.pending_queue_size
 
         usage = UsageInfo(
             prompt_tokens=num_prompt_tokens,
             completion_tokens=num_generated_tokens,
             total_tokens=num_prompt_tokens + num_generated_tokens,
+            active_lora_adapters=active_lora_adapters,
+            pending_queue_size=pending_queue_size
         )
 
         return CompletionResponse(

@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, ClassVar, Dict, Iterable, List, Optional
 from typing import Sequence as GenericSequence
 from typing import Set, Type, TypeVar, Union
 
+from collections import Counter as collectionsCounter
+
 from transformers import GenerationConfig, PreTrainedTokenizer
 
 from vllm.config import (CacheConfig, DecodingConfig, DeviceConfig, LoadConfig,
@@ -216,6 +218,7 @@ class LLMEngine:
         self.observability_config = observability_config or ObservabilityConfig(
         )
         self.log_stats = log_stats
+        self.active_lora_adapters = active_lora_adapters
 
         if not self.model_config.skip_tokenizer_init:
             self.tokenizer = self._init_tokenizer()
@@ -582,7 +585,7 @@ class LLMEngine:
             arrival_time = time.time()
             
         if lora_request is not None:
-            self.active_lora_adapters[lora_request.lora_name] = self.active_lora_adapters.get(lora_request.lora_name, 0) + 1
+            self.active_lora_adapters[lora_request.lora_name] = 1
 
         processed_inputs = self.process_model_inputs(request_id=request_id,
                                                      inputs=inputs,
@@ -822,12 +825,12 @@ class LLMEngine:
             scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
         
         for request in request_outputs:
-            if request.finished and request.lora_request.lora_name in self.active_lora_adapters:
-                count = self.active_lora_adapters[request.lora_request.lora_name] - 1
-                if count == 0:
-                    del self.active_lora_adapters[request.lora_request.lora_name]
-                else:
-                    self.active_lora_adapters[request.lora_request.lora_name] = count
+            if request.finished:
+                request.pending_queue_size = len(self.scheduler.waiting)
+                active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
+                active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
+                request.active_lora_adapters = dict(collectionsCounter(active_lora_adapters_lt))
+                request.active_lora_adapters.update({k: 0 for k in self.active_lora_adapters.keys()})
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
 

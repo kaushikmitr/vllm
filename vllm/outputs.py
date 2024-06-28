@@ -88,6 +88,8 @@ class RequestOutput:
         finished: bool,
         metrics: Optional[RequestMetrics] = None,
         lora_request: Optional[LoRARequest] = None,
+        active_lora_adapters: Optional[dict] = {},
+        pending_queue_size: Optional[int] = 0
     ) -> None:
         self.request_id = request_id
         self.prompt = prompt
@@ -97,6 +99,8 @@ class RequestOutput:
         self.finished = finished
         self.metrics = metrics
         self.lora_request = lora_request
+        self.active_lora_adapters = active_lora_adapters
+        self.pending_queue_size = pending_queue_size
 
     @classmethod
     def from_seq_group(cls, seq_group: SequenceGroup) -> "RequestOutput":

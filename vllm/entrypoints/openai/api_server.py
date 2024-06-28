@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Optional, Set
 
+import json
 import fastapi
 import uvicorn
 from fastapi import Request
@@ -146,14 +147,21 @@ async def create_chat_completion(request: ChatCompletionRequest,
 async def create_completion(request: CompletionRequest, raw_request: Request):
     generator = await openai_serving_completion.create_completion(
         request, raw_request)
+    custom_headers = {}
+    if hasattr(generator, 'usage') and generator.usage:
+        if generator.usage.active_lora_adapters is not None:
+            custom_headers["active_lora_adapters"] = json.dumps(generator.usage.active_lora_adapters, headers=custom_headers)
+        if generator.usage.pending_queue_size is not None:
+            custom_headers["pending_queue_size"] = str(generator.usage.pending_queue_size, headers=custom_headers)
+                
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(),
-                            status_code=generator.code)
+                            status_code=generator.code, headers=custom_headers)
     if request.stream:
         return StreamingResponse(content=generator,
                                  media_type="text/event-stream")
     else:
-        return JSONResponse(content=generator.model_dump())
+        return JSONResponse(content=generator.model_dump(), headers=custom_headers)
 
 
 @app.post("/v1/embeddings")
