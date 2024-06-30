@@ -139,7 +139,10 @@ class Metrics:
             documentation="Average generation throughput in tokens/s.",
             labelnames=labelnames,
         )
-
+        self.gauge_scheduler_active_lora_adapters = Gauge(
+            name="vllm:active_lora_adapters",
+            documentation="Active lora adapters.",
+            labelnames=labelnames + ["dict_key"])
 
 # end-metrics-definitions
 
@@ -176,6 +179,10 @@ class Stats:
     num_running_sys: int
     num_waiting_sys: int
     num_swapped_sys: int
+    
+    # lora specific 
+    active_lora_adapters: dict
+    
     #   KV Cache Usage in %
     gpu_cache_usage_sys: float
     cpu_cache_usage_sys: float
@@ -264,6 +271,10 @@ class StatLogger:
         # Latency
         self._log_histogram(self.metrics.histogram_e2e_time_request,
                             stats.time_e2e_requests)
+        
+        self._log_dict_metric(self.metrics.gauge_scheduler_active_lora_adapters,
+                        stats.active_lora_adapters)  # lora specific
+        
         # Metadata
         finished_reason_counter = CollectionsCounter(
             stats.finished_reason_requests)
@@ -312,6 +323,12 @@ class StatLogger:
             **self.labels).set(prompt_throughput)
         self.metrics.gauge_avg_generation_throughput.labels(
             **self.labels).set(generation_throughput)
+        
+    def _log_dict_metric(self, gauge: Gauge, data: Dict[str, Union[int, float]]) -> None:
+        for key, value in data.items():
+            labels = self.labels.copy()
+            labels["dict_key"] = key
+            gauge.labels(**labels).set(value)
 
     def log(self, stats: Stats) -> None:
         """Called by LLMEngine.

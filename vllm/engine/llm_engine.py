@@ -876,6 +876,12 @@ class LLMEngine:
         num_swapped_sys = len(self.scheduler.swapped)
         num_waiting_sys = len(self.scheduler.waiting)
 
+        #lora specific
+        active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
+        active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
+        active_lora_adapters = {k: 0 for k in self.active_lora_adapters.keys()}
+        active_lora_adapters.update(dict(collectionsCounter(active_lora_adapters_lt)))
+        
         # KV Cache Usage in %
         num_total_gpu = self.cache_config.num_gpu_blocks
         gpu_cache_usage_sys = 0.
@@ -996,6 +1002,8 @@ class LLMEngine:
             num_running_sys=num_running_sys,
             num_swapped_sys=num_swapped_sys,
             num_waiting_sys=num_waiting_sys,
+            # lora specific
+            active_lora_adapters=active_lora_adapters,
             #   KV Cache Usage in %
             gpu_cache_usage_sys=gpu_cache_usage_sys,
             cpu_cache_usage_sys=cpu_cache_usage_sys,
