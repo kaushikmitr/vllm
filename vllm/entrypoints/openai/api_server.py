@@ -1,9 +1,11 @@
 import asyncio
+import base64
 import importlib
 import inspect
 import re
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+import struct
 from typing import Optional, Set
 
 import json
@@ -67,7 +69,28 @@ async def lifespan(app: fastapi.FastAPI):
 
 app = fastapi.FastAPI(lifespan=lifespan)
 
+def dict_to_orca(data_dict):
+    orca_data = bytearray()
+    orca_data.extend(b'ORCA')  # Magic number
+    orca_data.extend(struct.pack('I', 1))  # Version number
+    orca_data.extend(struct.pack('I', len(data_dict)))  # Number of key-value pairs
 
+    for key, value in data_dict.items():
+        key_bytes = key.encode('utf-8')
+        orca_data.extend(struct.pack('I', len(key_bytes)))  # Length of key
+        orca_data.extend(key_bytes)  # Key
+        orca_data.extend(struct.pack('i', value))  # Value (assuming 4-byte integer)
+
+    return orca_data
+
+def int_to_orca(value):
+    orca_data = bytearray()
+    orca_data.extend(b'ORCA')  # Magic number
+    orca_data.extend(struct.pack('I', 1))  # Version number
+    orca_data.extend(struct.pack('i', value))  # Single integer value
+    return orca_data
+
+    return orca_data
 def parse_args():
     parser = make_arg_parser()
     return parser.parse_args()
@@ -151,8 +174,12 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
     if hasattr(generator, 'usage') and generator.usage:
         if generator.usage.active_lora_adapters is not None:
             custom_headers["active_lora_adapters"] = json.dumps(generator.usage.active_lora_adapters)
+            orca_active_lora_adapters = dict_to_orca(generator.usage.active_lora_adapters)
+            custom_headers["orca_active_lora_adapters"] = base64.b64encode(orca_active_lora_adapters).decode('utf-8')
         if generator.usage.pending_queue_size is not None:
             custom_headers["pending_queue_size"] = str(generator.usage.pending_queue_size)
+            orca_pending_queue_size = int_to_orca(generator.usage.pending_queue_size)
+            custom_headers["orca_pending_queue_size"] = base64.b64encode(orca_pending_queue_size).decode('utf-8')
                 
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(),
