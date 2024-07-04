@@ -1,0 +1,43 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc-envoy-deployment
+  labels:
+    app: grpc-envoy
+spec:
+  replicas: 20
+  selector:
+    matchLabels:
+      app: grpc-envoy
+  template:
+    metadata:
+      labels:
+        app: grpc-envoy
+    spec:
+      containers:
+      - name: grpc-envoy
+        image: istio/proxyv2:1.15.0
+        command: ["/usr/local/bin/envoy"]
+        args:
+        - --config-path /etc/envoy/envoy.yaml
+        - --log-level trace
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: envoy-config
+          mountPath: /etc/envoy
+          readOnly: true
+        - name: certs
+          mountPath: /etc/ssl/envoy
+      - name: curl
+        image: curlimages/curl
+        command: ["sleep", "3600"]
+      volumes:
+      - name: envoy-config
+        configMap:
+          name: envoy-config
+      - name: certs
+        secret:
+          secretName: envoy-certs
+

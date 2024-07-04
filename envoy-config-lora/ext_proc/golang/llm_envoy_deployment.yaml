@@ -1,0 +1,43 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-envoy-deployment
+  labels:
+    app: llm-envoy-deployment
+spec:
+  replicas: 20
+  selector:
+    matchLabels:
+      app: llm-envoy-deployment
+  template:
+    metadata:
+      labels:
+        app: llm-envoy-deployment
+    spec:
+      containers:
+      - name: llm-envoy-deployment
+        image: envoyproxy/envoy:v1.17.0
+        command: ["/usr/local/bin/envoy"]
+        args:
+        - --config-path /etc/envoy/envoy.yaml
+        - --log-level trace
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: envoy-config
+          mountPath: /etc/envoy
+          readOnly: true
+        - name: certs
+          mountPath: /etc/ssl/envoy
+      - name: curl
+        image: curlimages/curl
+        command: ["sleep", "3600"]
+      volumes:
+      - name: envoy-config
+        configMap:
+          name: llm-envoy-config
+      - name: certs
+        secret:
+          secretName: envoy-certs
+
