@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -17,6 +15,7 @@ import (
 	"syscall"
 	"time"
 	"strconv"
+	"encoding/json"
 
 	"github.com/coocood/freecache"
 	"github.com/prometheus/common/expfmt"
@@ -32,8 +31,12 @@ import (
 )
 
 var (
-	cache    *freecache.Cache
-	cacheKey = []byte("key")
+	cache *freecache.Cache
+		pods = []string{
+		//"vllm-0.vllm-lora.default.svc.cluster.local",
+		//"vllm-1.vllm-lora.default.svc.cluster.local",
+		//"vllm-2.vllm-lora.default.svc.cluster.local",
+	}
 )
 
 type server struct{}
@@ -47,14 +50,8 @@ func (s *healthServer) Check(ctx context.Context, in *healthPb.HealthCheckReques
 func (s *healthServer) Watch(in *healthPb.HealthCheckRequest, srv healthPb.Health_WatchServer) error {
 	return status.Error(codes.Unimplemented, "Watch is not implemented")
 }
-
-type PodMetrics struct {
-	PodName             string
-	NoOfPendingRequests int
-	ModelsLoaded        []string
-}
-
 type ModelMetrics struct {
+	Date               string
 	PodName            string
 	ModelName          string
 	ActiveLoraAdapters int
@@ -84,38 +81,49 @@ func fetchMetricsFromPod(pod string, ch chan<- []ModelMetrics, wg *sync.WaitGrou
 		return
 	}
 
+	
+
 	var metrics []ModelMetrics
+	modelsDict := make(map[string]int)  // Create a dictionary for model names and activeLoraAdapters
+	pendingRequests := 0
+
 
 	for name, mf := range metricFamilies {
+		var activeLoraAdapters int
+		var modelName string
 		switch name {
 		case "vllm:active_lora_adapters":
 			for _, m := range mf.GetMetric() {
-				modelName := getLabelValue(m, "dict_key")
-				activeLoraAdapters := int(m.GetGauge().GetValue())
-
-				metric := ModelMetrics{
-					PodName:            pod,
-					ModelName:          modelName,
-					ActiveLoraAdapters: activeLoraAdapters,
-				}
-				metrics = append(metrics, metric)
-				log.Printf("Pod: %s, Metric: %s, Model: %s, ActiveLoraAdapters: %d", pod, name, modelName, activeLoraAdapters)
+				modelName = getLabelValue(m, "dict_key")
+				activeLoraAdapters = int(m.GetGauge().GetValue())
+				modelsDict[modelName] = activeLoraAdapters  // Update the dictionary
+				//log.Printf("Pod: %s, Metric: %s, Model: %s, ActiveLoraAdapters: %d", pod, name, modelName, activeLoraAdapters)
 			}
 		case "vllm:num_requests_waiting":
 			for _, m := range mf.GetMetric() {
-				modelName := getLabelValue(m, "model_name")
-				pendingRequests := int(m.GetGauge().GetValue())
-
-				metric := ModelMetrics{
-					PodName:         pod,
-					ModelName:       modelName,
-					PendingRequests: pendingRequests,
-				}
-				metrics = append(metrics, metric)
-				log.Printf("Pod: %s, Metric: %s, Model: %s, PendingRequests: %d", pod, name, modelName, pendingRequests)
+				pendingRequests = int(m.GetGauge().GetValue())
+				//log.Printf("Pod: %s, Metric: %s, PendingRequests: %d", pod, name, pendingRequests)
 			}
 		}
 	}
+	for modelName, activeLoraAdapters := range modelsDict {
+		metric := ModelMetrics{
+			Date:               time.Now().Format(time.RFC3339),
+			PodName:            pod,
+			ModelName:          modelName,
+			ActiveLoraAdapters: activeLoraAdapters,
+			PendingRequests:    pendingRequests,
+		}
+		metrics = append(metrics, metric)
+	}
+	metric := ModelMetrics{
+		Date:               time.Now().Format(time.RFC3339),
+		PodName:            pod,
+		ModelName:          "",
+		ActiveLoraAdapters: 0,
+		PendingRequests:    pendingRequests,
+	}
+	metrics = append(metrics, metric)
 
 	ch <- metrics
 }
@@ -149,13 +157,6 @@ func getLabelValue(m *io_prometheus_client.Metric, label string) string {
 		}
 	}
 	return ""
-}
-
-// Metric represents the structure of each metric item
-type Metric struct {
-	PodName         string
-	ModelName       string
-	PendingRequests int
 }
 
 // FindTargetPod finds the best pod based on the provided metrics, requested model, and threshold
@@ -221,7 +222,6 @@ func FindTargetPod(metrics []ModelMetrics, loraAdapterRequested string, threshol
 	return targetPod
 }
 
-
 func extractPodName(dns string) string {
 	parts := strings.Split(dns, ".")
 	if len(parts) > 0 {
@@ -229,6 +229,19 @@ func extractPodName(dns string) string {
 	}
 	return ""
 }
+func fetchMetricsPeriodically(interval time.Duration) {
+	for {
+		metrics := fetchMetrics(pods)
+		for _, metric := range metrics {
+			cacheKey := fmt.Sprintf("%s:%s", metric.PodName, metric.ModelName)
+			cacheValue := fmt.Sprintf("date:%s,active_adapters:%d,pending_queue:%d", metric.Date, metric.ActiveLoraAdapters, metric.PendingRequests)
+			cache.Set([]byte(cacheKey), []byte(cacheValue), int(interval.Seconds()))
+			log.Printf("Cache updated - Key: %s, Value: %s", cacheKey, cacheValue)
+		}
+		time.Sleep(interval)
+	}
+}
+
 func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 
 	log.Println(" ")
@@ -237,13 +250,10 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 
 	ctx := srv.Context()
 
-	contentType := ""
-	csrf := ""
+	//contentType := ""
 	lora_adapter_requested := ""
-	threshold := 100
+	threshold := 100000
 	targetPod := "vllm-x"
-
-	
 
 	for {
 
@@ -277,31 +287,18 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			r := req.Request
 			h := r.(*extProcPb.ProcessingRequest_RequestHeaders)
 
-			log.Printf("Request: %+v\n", r)
+			//log.Printf("Request: %+v\n", r)
 			log.Printf("Headers: %+v\n", h)
 			log.Printf("EndOfStream: %v\n", h.RequestHeaders.EndOfStream)
 
 			// List of backend pod addresses. Replace with actual pod addresses or make configurable.
-			pods := []string{"vllm-0.vllm-lora.default.svc.cluster.local", "vllm-1.vllm-lora.default.svc.cluster.local", "vllm-2.vllm-lora.default.svc.cluster.local"}
-			fmt.Printf("Pods to check: %v\n", pods)
-
-			fmt.Println("Fetching metrics from pods...")
-			metrics := fetchMetrics(pods)
-			fmt.Printf("Fetched metrics: %+v\n", metrics)
+			//fmt.Printf("Pods to check: %v\n", pods)
+			
 
 			for _, n := range h.RequestHeaders.Headers.Headers {
-				if strings.ToLower(n.Key) == "content-type" {
-					contentType = n.Value
-				}
-				if strings.ToLower(n.Key) == "x-csrf" {
-					csrf = n.Value
-				}
-				if strings.ToLower(n.Key) == "x-cache" {
-					_, err := cache.Get(cacheKey)
-					if err != nil {
-						cache.Set(cacheKey, []byte(n.Value), 1)
-					}
-				}
+				//if strings.ToLower(n.Key) == "content-type" {
+				//	contentType = n.Value
+				//}
 				if strings.ToLower(n.Key) == "lora-adapter" {
 					lora_adapter_requested = n.Value
 				}
@@ -309,20 +306,43 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 					t, err := strconv.Atoi(n.Value)
 					if err != nil {
 						fmt.Printf("Error converting threshold value: %n.Value\n", err)
-					} else{
+					} else {
 						threshold = t
 					}
-					
+
 				}
 			}
+			//fmt.Println("Fetching metrics from pods...")
+			//metrics := fetchMetrics(pods)
+			// Retrieve metrics from cache
+			var metrics []ModelMetrics
+			for _, pod := range pods {
+				cacheKey := fmt.Sprintf("%s:%s", pod, lora_adapter_requested)
+				value, err := cache.Get([]byte(cacheKey))
+				if err == nil {
+					var metric ModelMetrics
+					fmt.Scan(string(value), "date:%s,active_adapters:%d,pending_queue:%d", &metric.Date, &metric.ActiveLoraAdapters, &metric.PendingRequests)
+					metric.PodName = pod 
+					metric.ModelName = lora_adapter_requested
+					metrics = append(metrics, metric)
+				}
+				if lora_adapter_requested != "" {
+					cacheKey := fmt.Sprintf("%s:%s", pod, "")
+					value, err := cache.Get([]byte(cacheKey))
+					if err == nil {
+						var metric ModelMetrics
+						fmt.Scan(string(value), "date:%s,active_adapters:%d,pending_queue:%d", &metric.Date, &metric.ActiveLoraAdapters, &metric.PendingRequests)
+						metric.PodName = pod 
+						metric.ModelName = ""
+						metrics = append(metrics, metric)
+					}
+					}
+			}
+			fmt.Printf("Fetched metrics: %+v\n", metrics)
 			targetPod = FindTargetPod(metrics, lora_adapter_requested, threshold)
 			fmt.Printf("Selected target pod: %s\n", targetPod)
 
-			bodyMode := filterPb.ProcessingMode_NONE
-			if csrf == "" {
-				bodyMode = filterPb.ProcessingMode_BUFFERED
-			}
-
+			bodyMode := filterPb.ProcessingMode_BUFFERED
 
 			resp = &extProcPb.ProcessingResponse{
 				Response: &extProcPb.ProcessingResponse_RequestHeaders{
@@ -337,12 +357,12 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 										},
 									},
 									{
-									Header: &configPb.HeaderValue{
-										Key:   "target_pod",
-										Value: extractPodName(targetPod ),
+										Header: &configPb.HeaderValue{
+											Key:   "target_pod",
+											Value: extractPodName(targetPod),
 										},
 									},
-									
+
 								},
 							},
 						},
@@ -357,7 +377,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			// Print final headers being sent
 			fmt.Println("Final headers being sent:")
 			for _, header := range resp.GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders() {
-			fmt.Printf("%s: %s\n", header.GetHeader().GetKey(), header.GetHeader().GetValue())
+				fmt.Printf("%s: %s\n", header.GetHeader().GetKey(), header.GetHeader().GetValue())
 			}
 
 			break
@@ -365,32 +385,14 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 		case *extProcPb.ProcessingRequest_RequestBody:
 
 			log.Println("--- In RequestBody processing")
-			r := req.Request
-			b := r.(*extProcPb.ProcessingRequest_RequestBody)
+			//r := req.Request
+			//b := r.(*extProcPb.ProcessingRequest_RequestBody)
 
-			log.Printf("Request: %+v\n", r)
-			log.Printf("Body: %+v\n", b)
-			log.Printf("EndOfStream: %v\n", b.RequestBody.EndOfStream)
-			log.Printf("Content Type: %v\n", contentType)
-			log.Printf("target pod: %v\n", targetPod)
-
-			t := http.Request{
-				Method: "POST",
-				Header: http.Header{"Content-Type": {contentType}},
-				Body:   ioutil.NopCloser(bytes.NewBuffer(b.RequestBody.Body)),
-			}
-
-			err := t.ParseMultipartForm(100000)
-			if err != nil {
-				log.Printf("parse error %v", err)
-			}
-
-			for key, value := range t.Form {
-				log.Printf("Form key: %v, form value %v\n", key, value)
-				if key == "csrf" {
-					csrf = value[0]
-				}
-			}
+			//log.Printf("Request: %+v\n", r)
+			//log.Printf("Body: %+v\n", b)
+			//log.Printf("EndOfStream: %v\n", b.RequestBody.EndOfStream)
+			//log.Printf("Content Type: %v\n", contentType)
+			//log.Printf("target pod: %v\n", targetPod)
 
 			resp = &extProcPb.ProcessingResponse{
 				Response: &extProcPb.ProcessingResponse_RequestBody{
@@ -419,12 +421,59 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			r := req.Request
 			h := r.(*extProcPb.ProcessingRequest_ResponseHeaders)
 
-			cacheEntry, _ := cache.Get(cacheKey)
-
-			log.Printf("Request: %+v\n", r)
+			//log.Printf("Request: %+v\n", r)
 			log.Printf("Headers: %+v\n", h)
-			log.Printf("Content Type: %v\n", contentType)
-			log.Printf("Cache entry: %v\n", cacheEntry)
+			//log.Printf("Content Type: %v\n", contentType)
+
+			// Retrieve and parse metrics from response headers
+			var metrics []ModelMetrics
+			var modelNames map[string]int
+			var pendingQueueSize int
+
+			for _, header := range h.ResponseHeaders.Headers.Headers {
+				switch header.Key {
+				case "active_lora_adapters":
+					err := json.Unmarshal([]byte(header.Value), &modelNames)
+					if err != nil {
+						log.Printf("Error parsing model_names: %v", err)
+					}
+				case "pending_queue_size":
+					var err error
+					pendingQueueSize, err = strconv.Atoi(header.Value)
+					if err != nil {
+						log.Printf("Error converting pending_queue_size: %v", err)
+					}
+				}
+			}
+
+			if modelNames != nil {
+				for modelName, activeLoraAdapters := range modelNames {
+					metric := ModelMetrics{
+						Date:               time.Now().Format(time.RFC3339),
+						PodName:            targetPod,
+						ModelName:          modelName,
+						ActiveLoraAdapters: activeLoraAdapters,
+						PendingRequests:    pendingQueueSize,
+					}
+					metrics = append(metrics, metric)
+				}
+			}
+			metric := ModelMetrics{
+				Date:               time.Now().Format(time.RFC3339),
+				PodName:            targetPod,
+				ModelName:          "",
+				ActiveLoraAdapters: 0,
+				PendingRequests:    pendingQueueSize,
+			}
+			metrics = append(metrics, metric)
+
+			// Update cache with parsed values
+			for _, metric := range metrics {
+				cacheKey := fmt.Sprintf("%s:%s", metric.PodName, metric.ModelName)
+				cacheValue := fmt.Sprintf("date:%s,active_adapters:%d,pending_queue:%d", metric.Date, metric.ActiveLoraAdapters, metric.PendingRequests)
+				cache.Set([]byte(cacheKey), []byte(cacheValue), int(30*time.Second.Seconds()))
+				log.Printf("Cache updated at response header - Key: %s, Value: %s", cacheKey, cacheValue)
+			}
 
 			resp = &extProcPb.ProcessingResponse{
 				Response: &extProcPb.ProcessingResponse_ResponseHeaders{
@@ -440,14 +489,8 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 									},
 									{
 										Header: &configPb.HeaderValue{
-											Key:   "x-extracted-csrf",
-											Value: csrf,
-										},
-									},
-									{
-										Header: &configPb.HeaderValue{
-											Key:   "x-extracted-cache",
-											Value: string(cacheEntry),
+											Key:   "target_pod",
+											Value: targetPod,
 										},
 									},
 								},
@@ -463,7 +506,6 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			log.Printf("Unknown Request type %+v\n", v)
 		}
 
-
 		if err := srv.Send(resp); err != nil {
 			log.Printf("send error %v", err)
 		}
@@ -475,6 +517,10 @@ func main() {
 	// cache init
 	cache = freecache.NewCache(1024)
 	debug.SetGCPercent(20)
+
+	// Start the periodic metrics fetching in a separate goroutine
+	interval := 30 * time.Second // Update interval for fetching metrics
+	go fetchMetricsPeriodically(interval)
 
 	// grpc server init
 	lis, err := net.Listen("tcp", ":50051")
@@ -503,3 +549,4 @@ func main() {
 
 	s.Serve(lis)
 }
+
