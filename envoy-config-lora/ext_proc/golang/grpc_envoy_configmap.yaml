@@ -27,7 +27,7 @@ data:
                             - match:
                                 prefix: "/"
                               route:  
-                                cluster: llm_backend
+                                cluster_header: "target_pod"
                                 timeout: 1000s  # Increase route timeout
                     http_filters:
                       - name: envoy.filters.http.ext_proc
@@ -48,19 +48,45 @@ data:
                         typed_config:
                           "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
       clusters:
-        - name: llm_backend
-          connect_timeout: 
+        - name: vllm-0
+          connect_timeout: 1000s
           type: STRICT_DNS
           lb_policy: ROUND_ROBIN
           load_assignment:
-            cluster_name: llm_backend
+            cluster_name: vllm-0
             endpoints:
               - lb_endpoints:
                   - endpoint:
                       address:
                         socket_address:
-                          address: llm-envoy-lora.default.svc.cluster.local
-                          port_value: 8080
+                          address: vllm-0.vllm-lora.default.svc.cluster.local
+                          port_value: 8000
+        - name: vllm-1
+          connect_timeout: 1000s
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: vllm-1
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: vllm-1.vllm-lora.default.svc.cluster.local
+                          port_value: 8000
+        - name: vllm-2
+          connect_timeout: 1000s
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: vllm-2
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: vllm-2.vllm-lora.default.svc.cluster.local
+                          port_value: 8000
         - name: ext_proc_cluster
           connect_timeout: 1000s
           type: STATIC
@@ -73,7 +99,7 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: 34.142.133.144
+                          address: grpc-server-deployment.default.svc.cluster.local
                           port_value: 50051
     # Enable detailed logging
     layered_runtime:

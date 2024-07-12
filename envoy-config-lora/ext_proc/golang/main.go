@@ -1,5 +1,4 @@
 package main
-
 import (
 	"context"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"time"
 	"strconv"
 	"encoding/json"
+	"math"
 
 	"github.com/coocood/freecache"
 	"github.com/prometheus/common/expfmt"
@@ -31,12 +31,14 @@ import (
 )
 
 var (
-	cache *freecache.Cache
+	cacheActiveLoraModel              *freecache.Cache
+	cachePendingRequestActiveAdapters *freecache.Cache
 		pods = []string{
-		//"vllm-0.vllm-lora.default.svc.cluster.local",
-		//"vllm-1.vllm-lora.default.svc.cluster.local",
-		//"vllm-2.vllm-lora.default.svc.cluster.local",
+		"vllm-0.vllm-lora.default.svc.cluster.local",
+		"vllm-1.vllm-lora.default.svc.cluster.local",
+		"vllm-2.vllm-lora.default.svc.cluster.local",
 	}
+	interval = 30 * time.Second // Update interval for fetching metrics
 )
 
 type server struct{}
@@ -50,15 +52,22 @@ func (s *healthServer) Check(ctx context.Context, in *healthPb.HealthCheckReques
 func (s *healthServer) Watch(in *healthPb.HealthCheckRequest, srv healthPb.Health_WatchServer) error {
 	return status.Error(codes.Unimplemented, "Watch is not implemented")
 }
-type ModelMetrics struct {
+type ActiveLoraModelMetrics struct {
 	Date               string
 	PodName            string
 	ModelName          string
 	ActiveLoraAdapters int
-	PendingRequests    int
 }
 
-func fetchMetricsFromPod(pod string, ch chan<- []ModelMetrics, wg *sync.WaitGroup) {
+type PendingRequestActiveAdaptersMetrics struct {
+	Date                  string
+	PodName               string
+	PendingRequests       int
+	NumberOfActiveAdapters int
+}
+
+
+func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	url := fmt.Sprintf("http://%s:8000/metrics", pod)
@@ -81,60 +90,104 @@ func fetchMetricsFromPod(pod string, ch chan<- []ModelMetrics, wg *sync.WaitGrou
 		return
 	}
 
-	
-
-	var metrics []ModelMetrics
-	modelsDict := make(map[string]int)  // Create a dictionary for model names and activeLoraAdapters
-	pendingRequests := 0
-
+	var loraMetrics []ActiveLoraModelMetrics
+	modelsDict := make(map[string]int)
 
 	for name, mf := range metricFamilies {
-		var activeLoraAdapters int
-		var modelName string
-		switch name {
-		case "vllm:active_lora_adapters":
+		if name == "vllm:active_lora_adapters" {
 			for _, m := range mf.GetMetric() {
-				modelName = getLabelValue(m, "dict_key")
-				activeLoraAdapters = int(m.GetGauge().GetValue())
-				modelsDict[modelName] = activeLoraAdapters  // Update the dictionary
-				//log.Printf("Pod: %s, Metric: %s, Model: %s, ActiveLoraAdapters: %d", pod, name, modelName, activeLoraAdapters)
-			}
-		case "vllm:num_requests_waiting":
-			for _, m := range mf.GetMetric() {
-				pendingRequests = int(m.GetGauge().GetValue())
-				//log.Printf("Pod: %s, Metric: %s, PendingRequests: %d", pod, name, pendingRequests)
+				modelName := getLabelValue(m, "dict_key")
+				activeLoraAdapters := int(m.GetGauge().GetValue())
+				modelsDict[modelName] = activeLoraAdapters
 			}
 		}
 	}
+
 	for modelName, activeLoraAdapters := range modelsDict {
-		metric := ModelMetrics{
+		loraMetric := ActiveLoraModelMetrics{
 			Date:               time.Now().Format(time.RFC3339),
 			PodName:            pod,
 			ModelName:          modelName,
 			ActiveLoraAdapters: activeLoraAdapters,
-			PendingRequests:    pendingRequests,
 		}
-		metrics = append(metrics, metric)
+		loraMetrics = append(loraMetrics, loraMetric)
 	}
-	metric := ModelMetrics{
-		Date:               time.Now().Format(time.RFC3339),
-		PodName:            pod,
-		ModelName:          "",
-		ActiveLoraAdapters: 0,
-		PendingRequests:    pendingRequests,
-	}
-	metrics = append(metrics, metric)
 
-	ch <- metrics
+	ch <- loraMetrics
 }
 
-func fetchMetrics(pods []string) []ModelMetrics {
-	ch := make(chan []ModelMetrics)
+func fetchRequestMetricsFromPod(pod string, ch chan<- []PendingRequestActiveAdaptersMetrics, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	url := fmt.Sprintf("http://%s:8000/metrics", pod)
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("failed to fetch metrics from %s: %v", pod, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("unexpected status code from %s: %v", pod, resp.StatusCode)
+		return
+	}
+
+	parser := expfmt.TextParser{}
+	metricFamilies, err := parser.TextToMetricFamilies(resp.Body)
+	if err != nil {
+		log.Printf("failed to parse metrics from %s: %v", pod, err)
+		return
+	}
+
+	var requestMetrics []PendingRequestActiveAdaptersMetrics
+	pendingRequests := 0
+	adapterCount := 0
+
+	for name, mf := range metricFamilies {
+		switch name {
+		case "vllm:num_requests_waiting":
+			for _, m := range mf.GetMetric() {
+				pendingRequests += int(m.GetGauge().GetValue())
+			}
+		case "vllm:num_requests_running":
+			for _, m := range mf.GetMetric() {
+				pendingRequests += int(m.GetGauge().GetValue())
+			}
+		case "vllm:active_lora_adapters":
+				for _, m := range mf.GetMetric() {
+					modelName := getLabelValue(m, "dict_key")
+					if modelName != ""{
+						adapterCount++
+					}
+				}
+		}
+	}
+
+	requestMetric := PendingRequestActiveAdaptersMetrics{
+		Date:                  time.Now().Format(time.RFC3339),
+		PodName:               pod,
+		PendingRequests:       pendingRequests,
+		NumberOfActiveAdapters: adapterCount,
+	}
+	requestMetrics = append(requestMetrics, requestMetric)
+
+	ch <- requestMetrics
+}
+
+func fetchMetrics(pods []string) ([]ActiveLoraModelMetrics, []PendingRequestActiveAdaptersMetrics) {
+	ch := make(chan []ActiveLoraModelMetrics)
+	ch2 := make(chan []PendingRequestActiveAdaptersMetrics)
 	var wg sync.WaitGroup
+	var wg2 sync.WaitGroup
 
 	for _, pod := range pods {
 		wg.Add(1)
-		go fetchMetricsFromPod(pod, ch, &wg)
+		go fetchLoraMetricsFromPod(pod, ch, &wg)
+	}
+
+	for _, pod := range pods {
+		wg2.Add(1)
+		go fetchRequestMetricsFromPod(pod, ch2, &wg2)
 	}
 
 	go func() {
@@ -142,12 +195,20 @@ func fetchMetrics(pods []string) []ModelMetrics {
 		close(ch)
 	}()
 
-	var allMetrics []ModelMetrics
-	for metrics := range ch {
-		allMetrics = append(allMetrics, metrics...)
-	}
+	go func() {
+		wg2.Wait()
+		close(ch2)
+	}()
 
-	return allMetrics
+	var allLoraMetrics []ActiveLoraModelMetrics
+	var allRequestMetrics []PendingRequestActiveAdaptersMetrics
+	for loraMetrics := range ch {
+		allLoraMetrics = append(allLoraMetrics, loraMetrics...)
+	}
+	for requestMetrics := range ch2 {
+		allRequestMetrics = append(allRequestMetrics, requestMetrics...)
+	}
+	return allLoraMetrics, allRequestMetrics
 }
 
 func getLabelValue(m *io_prometheus_client.Metric, label string) string {
@@ -159,64 +220,74 @@ func getLabelValue(m *io_prometheus_client.Metric, label string) string {
 	return ""
 }
 
-// FindTargetPod finds the best pod based on the provided metrics, requested model, and threshold
-func FindTargetPod(metrics []ModelMetrics, loraAdapterRequested string, threshold int) string {
+func FindTargetPod(loraMetrics []ActiveLoraModelMetrics, requestMetrics []PendingRequestActiveAdaptersMetrics, loraAdapterRequested string, threshold int) string {
 	var targetPod string
-	minRequests := int(^uint(0) >> 1) // Initialize to max int value
 	bestAlternativePod := ""
-	minAltRequests := int(^uint(0) >> 1) // Initialize to max int value
-	allZeroRequests := true
+	minAltRequests := math.MaxInt
 
 	fmt.Println("Searching for the best pod...")
-	for _, metric := range metrics {
-		if metric.ModelName == loraAdapterRequested && metric.ActiveLoraAdapters > 0 && metric.PendingRequests > 0 {
-			allZeroRequests = false
-			break
+
+	// Filter metrics for the requested model
+	for _, reqMetric := range requestMetrics {
+		if reqMetric.PendingRequests < minAltRequests {
+			minAltRequests = reqMetric.PendingRequests
+			bestAlternativePod = reqMetric.PodName
 		}
 	}
 
-	for _, metric := range metrics {
-		fmt.Printf("Checking pod: %s, model: %s, pending requests: %d\n", metric.PodName, metric.ModelName, metric.PendingRequests)
-
-		if loraAdapterRequested == "" {
-			// If no specific model is requested, find the pod with the least pending requests
-			if metric.PendingRequests < minRequests {
-				minRequests = metric.PendingRequests
-				targetPod = metric.PodName
-				fmt.Printf("New best pod found: %s with %d pending requests\n", targetPod, minRequests)
-			}
-		} else {
-			// Specific model requested
-			if metric.ModelName == loraAdapterRequested && metric.ActiveLoraAdapters > 0 {
-				if metric.PendingRequests < minRequests {
-					minRequests = metric.PendingRequests
-					targetPod = metric.PodName
-					fmt.Printf("New best pod found: %s with %d pending requests\n", targetPod, minRequests)
-				}
-			} else if allZeroRequests && metric.ModelName == loraAdapterRequested {
-				if metric.PendingRequests < minRequests {
-					minRequests = metric.PendingRequests
-					targetPod = metric.PodName
-					fmt.Printf("New best pod found: %s with %d pending requests\n", targetPod, minRequests)
-				}
-			} else {
-				// Keep track of the pod with the least pending requests as a fallback
-				if metric.PendingRequests < minAltRequests {
-					minAltRequests = metric.PendingRequests
-					bestAlternativePod = metric.PodName
-				}
-			}
-		}
-	}
-
-	// If the number of requests in the selected pod is greater than the threshold, choose the pod with the least requests
-	if minRequests > threshold && bestAlternativePod != "" {
+	if loraAdapterRequested == "" {
 		targetPod = bestAlternativePod
-		fmt.Printf("Selected pod's requests exceed threshold, selecting the best alternative pod: %s with %d pending requests\n", targetPod, minAltRequests)
+		if targetPod == "" {
+			fmt.Println("Error: No pod found")
+		} else {
+			fmt.Printf("Selected the best alternative pod: %s with %d pending requests\n", targetPod, minAltRequests)
+		}
+		return targetPod
+	}
+
+	var relevantMetrics []ActiveLoraModelMetrics
+	for _, metric := range loraMetrics {
+		if metric.ModelName == loraAdapterRequested {
+			relevantMetrics = append(relevantMetrics, metric)
+		}
+	}
+
+	// If no metrics found for the requested model, choose the pod with the least active adapters
+	if len(relevantMetrics) == 0 {
+		minActiveAdapter := math.MaxInt
+		for _, reqMetric := range requestMetrics {
+			if minActiveAdapter > reqMetric.NumberOfActiveAdapters {
+				minActiveAdapter = reqMetric.NumberOfActiveAdapters
+				targetPod = reqMetric.PodName
+			}
+		}
+		if targetPod == "" {
+			fmt.Println("Error: No pod with min adapter found")
+		} else {
+			fmt.Printf("Selected pod with the least active adapters: %s\n", targetPod)
+		}
+		return targetPod
+	}
+
+	// Find the pod with the least active Lora adapters among the relevant metrics
+	minActiveLoraAdapters := math.MaxInt
+	for _, metric := range relevantMetrics {
+		fmt.Printf("Checking pod: %s, model: %s, active Lora adapters: %d\n", metric.PodName, metric.ModelName, metric.ActiveLoraAdapters)
+		if metric.ActiveLoraAdapters < minActiveLoraAdapters {
+			minActiveLoraAdapters = metric.ActiveLoraAdapters
+			targetPod = metric.PodName
+			fmt.Printf("New best pod found: %s with %d active Lora adapters\n", targetPod, minActiveLoraAdapters)
+		}
+	}
+
+	// If the number of active Lora adapters in the selected pod is greater than the threshold, choose the pod with the least requests
+	if minActiveLoraAdapters > threshold && bestAlternativePod != "" {
+		targetPod = bestAlternativePod
+		fmt.Printf("Selected pod's active Lora adapters exceed threshold, selecting the best alternative pod: %s with %d pending requests\n", targetPod, minAltRequests)
 	}
 
 	if targetPod == "" {
-		fmt.Printf("Error: No pod found\n")
+		fmt.Println("Error: No pod found")
 	}
 
 	return targetPod
@@ -229,14 +300,93 @@ func extractPodName(dns string) string {
 	}
 	return ""
 }
+
+
+// Methods for setting and getting metrics from the cache
+func setCacheActiveLoraModel(metric ActiveLoraModelMetrics) error {
+	cacheKey := fmt.Sprintf("%s:%s", metric.PodName, metric.ModelName)
+	cacheValue, err := json.Marshal(metric)
+	if err != nil {
+		return fmt.Errorf("error marshaling ActiveLoraModelMetrics for key %s: %v", cacheKey, err)
+	}
+	err = cacheActiveLoraModel.Set([]byte(cacheKey), cacheValue, 0)
+	if err != nil {
+		return fmt.Errorf("error setting cacheActiveLoraModel for key %s: %v", cacheKey, err)
+	}
+	fmt.Printf("Set cacheActiveLoraModel - Key: %s, Value: %s\n", cacheKey, cacheValue)
+	return nil
+}
+
+func setCachePendingRequestActiveAdapters(metric PendingRequestActiveAdaptersMetrics) error {
+	cacheKey := fmt.Sprintf("%s:", metric.PodName)
+	cacheValue, err := json.Marshal(metric)
+	if err != nil {
+		return fmt.Errorf("error marshaling PendingRequestActiveAdaptersMetrics for key %s: %v", cacheKey, err)
+	}
+	err = cachePendingRequestActiveAdapters.Set([]byte(cacheKey), cacheValue, 0)
+	if err != nil {
+		return fmt.Errorf("error setting cachePendingRequestActiveAdapters for key %s: %v", cacheKey, err)
+	}
+	fmt.Printf("Set cachePendingRequestActiveAdapters - Key: %s, Value: %s\n", cacheKey, cacheValue)
+	return nil
+}
+
+func getCacheActiveLoraModel(podName, modelName string) (*ActiveLoraModelMetrics, error) {
+	cacheKey := fmt.Sprintf("%s:%s", podName, modelName)
+
+
+	value, err := cacheActiveLoraModel.Get([]byte(cacheKey))
+
+
+
+	if err != nil {
+		return nil, fmt.Errorf("error fetching cacheActiveLoraModel for key %s: %v", cacheKey, err)
+	}
+	var metric ActiveLoraModelMetrics
+	err = json.Unmarshal(value, &metric)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshaling ActiveLoraModelMetrics for key %s: %v", cacheKey, err)
+	}
+	fmt.Printf("Got cacheActiveLoraModel - Key: %s, Value: %s\n", cacheKey, value)
+	return &metric, nil
+}
+
+func getCachePendingRequestActiveAdapters(podName string) (*PendingRequestActiveAdaptersMetrics, error) {
+	cacheKey := fmt.Sprintf("%s:", podName)
+
+
+	value, err := cachePendingRequestActiveAdapters.Get([]byte(cacheKey))
+
+
+
+	if err != nil {
+		return nil, fmt.Errorf("error fetching cachePendingRequestActiveAdapters for key %s: %v", cacheKey, err)
+	}
+	var metric PendingRequestActiveAdaptersMetrics
+	err = json.Unmarshal(value, &metric)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshaling PendingRequestActiveAdaptersMetrics for key %s: %v", cacheKey, err)
+	}
+	fmt.Printf("Got cachePendingRequestActiveAdapters - Key: %s, Value: %s\n", cacheKey, value)
+	return &metric, nil
+}
+// Inside the fetchMetricsPeriodically function
 func fetchMetricsPeriodically(interval time.Duration) {
 	for {
-		metrics := fetchMetrics(pods)
-		for _, metric := range metrics {
-			cacheKey := fmt.Sprintf("%s:%s", metric.PodName, metric.ModelName)
-			cacheValue := fmt.Sprintf("date:%s,active_adapters:%d,pending_queue:%d", metric.Date, metric.ActiveLoraAdapters, metric.PendingRequests)
-			cache.Set([]byte(cacheKey), []byte(cacheValue), int(interval.Seconds()))
-			log.Printf("Cache updated - Key: %s, Value: %s", cacheKey, cacheValue)
+		loraMetrics, requestMetrics := fetchMetrics(pods)
+		fmt.Printf("fetchMetricsPeriodically requestMetrics: %+v\n", requestMetrics)
+		fmt.Printf("fetchMetricsPeriodically loraMetrics: %+v\n", loraMetrics)
+		cacheActiveLoraModel.Clear()
+		cachePendingRequestActiveAdapters.Clear()
+		for _, metric := range loraMetrics {
+			if err := setCacheActiveLoraModel(metric); err != nil {
+				log.Printf("Error setting cache: %v", err)
+			}
+		}
+		for _, metric := range requestMetrics {
+			if err := setCachePendingRequestActiveAdapters(metric); err != nil {
+				log.Printf("Error setting cache: %v", err)
+			}
 		}
 		time.Sleep(interval)
 	}
@@ -312,36 +462,69 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 
 				}
 			}
-			//fmt.Println("Fetching metrics from pods...")
-			//metrics := fetchMetrics(pods)
 			// Retrieve metrics from cache
-			var metrics []ModelMetrics
+			var loraMetrics []ActiveLoraModelMetrics
+			var requestMetrics []PendingRequestActiveAdaptersMetrics
+
 			for _, pod := range pods {
-				cacheKey := fmt.Sprintf("%s:%s", pod, lora_adapter_requested)
-				value, err := cache.Get([]byte(cacheKey))
+				loraMetric, err := getCacheActiveLoraModel(pod, lora_adapter_requested)
 				if err == nil {
-					var metric ModelMetrics
-					fmt.Scan(string(value), "date:%s,active_adapters:%d,pending_queue:%d", &metric.Date, &metric.ActiveLoraAdapters, &metric.PendingRequests)
-					metric.PodName = pod 
-					metric.ModelName = lora_adapter_requested
-					metrics = append(metrics, metric)
+					loraMetrics = append(loraMetrics, *loraMetric)
+				} else if err != freecache.ErrNotFound {
+					log.Printf("Error fetching cacheActiveLoraModel for pod %s and lora_adapter_requested %s: %v", pod, lora_adapter_requested, err)
 				}
-				if lora_adapter_requested != "" {
-					cacheKey := fmt.Sprintf("%s:%s", pod, "")
-					value, err := cache.Get([]byte(cacheKey))
-					if err == nil {
-						var metric ModelMetrics
-						fmt.Scan(string(value), "date:%s,active_adapters:%d,pending_queue:%d", &metric.Date, &metric.ActiveLoraAdapters, &metric.PendingRequests)
-						metric.PodName = pod 
-						metric.ModelName = ""
-						metrics = append(metrics, metric)
-					}
-					}
+
+				requestMetric, err := getCachePendingRequestActiveAdapters(pod)
+				if err == nil {
+					requestMetrics = append(requestMetrics, *requestMetric)
+				} else if err != freecache.ErrNotFound {
+					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", pod, err)
+				}
 			}
-			fmt.Printf("Fetched metrics: %+v\n", metrics)
-			targetPod = FindTargetPod(metrics, lora_adapter_requested, threshold)
+
+			fmt.Printf("Fetched loraMetrics: %+v\n", loraMetrics)
+			fmt.Printf("Fetched requestMetrics: %+v\n", requestMetrics)
+			targetPod = FindTargetPod(loraMetrics, requestMetrics, lora_adapter_requested, threshold)
 			fmt.Printf("Selected target pod: %s\n", targetPod)
 
+			// Increment PendingRequests and update ActiveLoraAdapters if needed
+			if targetPod != "" {
+				requestMetric, err := getCachePendingRequestActiveAdapters(targetPod)
+				if err == nil {
+					requestMetric.PendingRequests++
+					if lora_adapter_requested != "" {
+						requestMetric.NumberOfActiveAdapters++
+					}
+					if err := setCachePendingRequestActiveAdapters(*requestMetric); err != nil {
+						log.Printf("Error updating PendingRequestActiveAdapters cache for pod %s: %v", targetPod, err)
+					}
+				} else if err != freecache.ErrNotFound {
+					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", targetPod, err)
+				}
+
+				if lora_adapter_requested != "" {
+					loraMetric, err := getCacheActiveLoraModel(targetPod, lora_adapter_requested)
+					if err == nil {
+						loraMetric.ActiveLoraAdapters++
+						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
+							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+						}
+					} else if err == freecache.ErrNotFound {
+						// Create new metric if not found in cache
+						loraMetric = &ActiveLoraModelMetrics{
+							Date:               time.Now().Format(time.RFC3339),
+							PodName:            targetPod,
+							ModelName:          lora_adapter_requested,
+							ActiveLoraAdapters: 1,
+						}
+						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
+							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+						}
+					} else {
+						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+					}
+				}
+			}
 			bodyMode := filterPb.ProcessingMode_BUFFERED
 
 			resp = &extProcPb.ProcessingResponse{
@@ -365,6 +548,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 
 								},
 							},
+							ClearRouteCache: true,
 						},
 					},
 				},
@@ -426,10 +610,11 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			//log.Printf("Content Type: %v\n", contentType)
 
 			// Retrieve and parse metrics from response headers
-			var metrics []ModelMetrics
+			var loraMetrics []ActiveLoraModelMetrics
+			var requestMetrics []PendingRequestActiveAdaptersMetrics
 			var modelNames map[string]int
 			var pendingQueueSize int
-
+			podAdapterMap := make(map[string]int)
 			for _, header := range h.ResponseHeaders.Headers.Headers {
 				switch header.Key {
 				case "active_lora_adapters":
@@ -448,31 +633,34 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 
 			if modelNames != nil {
 				for modelName, activeLoraAdapters := range modelNames {
-					metric := ModelMetrics{
+					metric := ActiveLoraModelMetrics{
 						Date:               time.Now().Format(time.RFC3339),
 						PodName:            targetPod,
 						ModelName:          modelName,
 						ActiveLoraAdapters: activeLoraAdapters,
-						PendingRequests:    pendingQueueSize,
 					}
-					metrics = append(metrics, metric)
+					podAdapterMap[metric.PodName]++
+					loraMetrics = append(loraMetrics, metric)
 				}
 			}
-			metric := ModelMetrics{
-				Date:               time.Now().Format(time.RFC3339),
-				PodName:            targetPod,
-				ModelName:          "",
-				ActiveLoraAdapters: 0,
-				PendingRequests:    pendingQueueSize,
+			requestMetric := PendingRequestActiveAdaptersMetrics{
+				Date:                  time.Now().Format(time.RFC3339),
+				PodName:               targetPod,
+				PendingRequests:       pendingQueueSize,
+				NumberOfActiveAdapters: podAdapterMap[targetPod],
 			}
-			metrics = append(metrics, metric)
+			requestMetrics = append(requestMetrics, requestMetric)
 
 			// Update cache with parsed values
-			for _, metric := range metrics {
-				cacheKey := fmt.Sprintf("%s:%s", metric.PodName, metric.ModelName)
-				cacheValue := fmt.Sprintf("date:%s,active_adapters:%d,pending_queue:%d", metric.Date, metric.ActiveLoraAdapters, metric.PendingRequests)
-				cache.Set([]byte(cacheKey), []byte(cacheValue), int(30*time.Second.Seconds()))
-				log.Printf("Cache updated at response header - Key: %s, Value: %s", cacheKey, cacheValue)
+			for _, metric := range loraMetrics {
+				if err := setCacheActiveLoraModel(metric); err != nil {
+					log.Printf("Error setting cache in Response Header: %v", err)
+				}
+			}
+			for _, metric := range requestMetrics {
+				if err := setCachePendingRequestActiveAdapters(metric); err != nil {
+					log.Printf("Error setting cache in Response Header: %v", err)
+				}
 			}
 
 			resp = &extProcPb.ProcessingResponse{
@@ -515,11 +703,12 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 func main() {
 
 	// cache init
-	cache = freecache.NewCache(1024)
+	cacheActiveLoraModel = freecache.NewCache(1024)
+	cachePendingRequestActiveAdapters = freecache.NewCache(1024)
 	debug.SetGCPercent(20)
 
 	// Start the periodic metrics fetching in a separate goroutine
-	interval := 30 * time.Second // Update interval for fetching metrics
+	
 	go fetchMetricsPeriodically(interval)
 
 	// grpc server init
@@ -549,4 +738,3 @@ func main() {
 
 	s.Serve(lis)
 }
-

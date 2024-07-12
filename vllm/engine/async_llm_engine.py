@@ -254,7 +254,10 @@ class _AsyncLLMEngine(LLMEngine):
                 request.pending_queue_size = len(self.scheduler.waiting)     
                 active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
                 active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-                request.active_lora_adapters = {k: 0 for k in self.active_lora_adapters.keys()}
+                request.active_lora_adapters = {}
+                for lora_id in self.list_loras():
+                    lora_name = self.lora_id_name_map.get(lora_id, "unknown")
+                    request.active_lora_adapters[lora_name] = 0
                 request.active_lora_adapters.update(dict(Counter(active_lora_adapters_lt)))
 
         
@@ -311,7 +314,7 @@ class _AsyncLLMEngine(LLMEngine):
             arrival_time = time.time()
             
         if lora_request is not None:
-            self.active_lora_adapters[lora_request.lora_name] = 1
+            self.lora_id_name_map[lora_request.lora_int_id] = lora_request.lora_name
 
         processed_inputs = await self.process_model_inputs_async(
             request_id=request_id, inputs=inputs, lora_request=lora_request)

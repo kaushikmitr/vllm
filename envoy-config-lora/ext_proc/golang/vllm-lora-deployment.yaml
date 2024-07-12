@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
         - name: lora
-          image: "us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/vllm-lora"
-          imagePullPolicy: IfNotPresent
+          image: "us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/vllm-lora:latest"
+          imagePullPolicy: Always
           env:
             - name: PORT
               value: "8000"

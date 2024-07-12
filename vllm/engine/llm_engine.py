@@ -162,6 +162,7 @@ class LLMEngine:
         executor_class: Type[ExecutorBase],
         log_stats: bool,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        lora_id_name_map: dict = {},
         active_lora_adapters: dict = {}
     ) -> None:
         logger.info(
@@ -218,6 +219,7 @@ class LLMEngine:
         self.observability_config = observability_config or ObservabilityConfig(
         )
         self.log_stats = log_stats
+        self.lora_id_name_map = lora_id_name_map
         self.active_lora_adapters = active_lora_adapters
 
         if not self.model_config.skip_tokenizer_init:
@@ -585,7 +587,7 @@ class LLMEngine:
             arrival_time = time.time()
             
         if lora_request is not None:
-            self.active_lora_adapters[lora_request.lora_name] = 1
+            self.lora_id_name_map[lora_request.lora_int_id] = lora_request.lora_name
 
         processed_inputs = self.process_model_inputs(request_id=request_id,
                                                      inputs=inputs,
@@ -829,7 +831,10 @@ class LLMEngine:
                 request.pending_queue_size = len(self.scheduler.waiting)
                 active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
                 active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-                request.active_lora_adapters = {k: 0 for k in self.active_lora_adapters.keys()}
+                request.active_lora_adapters = {}
+                for lora_id in self.list_loras():
+                    lora_name = self.lora_id_name_map.get(lora_id, "unknown")
+                    request.active_lora_adapters[lora_name] = 0
                 request.active_lora_adapters.update(dict(Counter(active_lora_adapters_lt)))
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
@@ -879,7 +884,10 @@ class LLMEngine:
         #lora specific
         active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
         active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-        active_lora_adapters = {k: 0 for k in self.active_lora_adapters.keys()}
+        active_lora_adapters = {}
+        for lora_id in self.list_loras():
+                    lora_name = self.lora_id_name_map[lora_id]
+                    active_lora_adapters[lora_name] = 0
         active_lora_adapters.update(dict(collectionsCounter(active_lora_adapters_lt)))
         
         # KV Cache Usage in %
