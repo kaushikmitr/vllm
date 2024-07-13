@@ -109,6 +109,9 @@ class DistributedGPUExecutor(GPUExecutor):
 
     def list_loras(self) -> Set[int]:
         return self._run_workers("list_loras")
+    
+    def list_active_loras(self) -> Set[int]:
+        return self._run_workers("list_active_loras")
 
     def save_sharded_state(
         self,

@@ -49,6 +49,7 @@ async def generate(request: Request) -> Response:
     assert engine is not None
     results_generator = engine.generate(prompt, sampling_params, request_id)
     active_lora_adapters = engine.active_lora_adapters
+    registered_lora_adapters = engine.registered_lora_adapters
     waiting_queue_size = engine._get_stats().num_waiting_sys
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
@@ -75,7 +76,7 @@ async def generate(request: Request) -> Response:
     assert final_output is not None
     prompt = final_output.prompt
     text_outputs = [prompt + output.text for output in final_output.outputs]
-    ret = {"text": text_outputs, "active_lora_adapters" : active_lora_adapters, "waiting_queue_size" : waiting_queue_size }
+    ret = {"text": text_outputs, "registered_lora_adapters" : registered_lora_adapters, "active_lora_adapters" : active_lora_adapters, "waiting_queue_size" : waiting_queue_size }
     return JSONResponse(ret)
 
 

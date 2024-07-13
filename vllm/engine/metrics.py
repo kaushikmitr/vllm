@@ -139,6 +139,12 @@ class Metrics:
             documentation="Average generation throughput in tokens/s.",
             labelnames=labelnames,
         )
+        
+        self.gauge_scheduler_registered_lora_adapters = Gauge(
+            name="vllm:registered_lora_adapters",
+            documentation="Active lora adapters.",
+            labelnames=labelnames + ["dict_key"])
+        
         self.gauge_scheduler_active_lora_adapters = Gauge(
             name="vllm:active_lora_adapters",
             documentation="Active lora adapters.",
@@ -180,8 +186,11 @@ class Stats:
     num_waiting_sys: int
     num_swapped_sys: int
     
-    # lora specific 
+    # lora specific
+    registered_lora_adapters: dict
     active_lora_adapters: dict
+    
+    
     
     #   KV Cache Usage in %
     gpu_cache_usage_sys: float
@@ -271,6 +280,9 @@ class StatLogger:
         # Latency
         self._log_histogram(self.metrics.histogram_e2e_time_request,
                             stats.time_e2e_requests)
+        
+        self._log_dict_metric(self.metrics.gauge_scheduler_registered_lora_adapters,
+                        stats.registered_lora_adapters)  # lora specific
         
         self._log_dict_metric(self.metrics.gauge_scheduler_active_lora_adapters,
                         stats.active_lora_adapters)  # lora specific

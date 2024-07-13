@@ -88,6 +88,7 @@ class RequestOutput:
         finished: bool,
         metrics: Optional[RequestMetrics] = None,
         lora_request: Optional[LoRARequest] = None,
+        registered_lora_adapters: Optional[dict] = {},
         active_lora_adapters: Optional[dict] = {},
         pending_queue_size: Optional[int] = 0
     ) -> None:
@@ -99,6 +100,7 @@ class RequestOutput:
         self.finished = finished
         self.metrics = metrics
         self.lora_request = lora_request
+        self.registered_lora_adapters = registered_lora_adapters
         self.active_lora_adapters = active_lora_adapters
         self.pending_queue_size = pending_queue_size
 

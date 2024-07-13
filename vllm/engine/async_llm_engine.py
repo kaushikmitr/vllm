@@ -251,14 +251,20 @@ class _AsyncLLMEngine(LLMEngine):
         
         for request in request_outputs:
             if request.finished:
-                request.pending_queue_size = len(self.scheduler.waiting)     
-                active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
-                active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-                request.active_lora_adapters = {}
+                request.pending_queue_size = len(self.scheduler.waiting) + len(self.scheduler.running)     
+                pending_lora_adapters = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
+                pending_lora_adapters.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
+                pending_lora_adapters_dict = dict(Counter(pending_lora_adapters))
+                
+                request.registered_lora_adapters = {}
                 for lora_id in self.list_loras():
                     lora_name = self.lora_id_name_map.get(lora_id, "unknown")
-                    request.active_lora_adapters[lora_name] = 0
-                request.active_lora_adapters.update(dict(Counter(active_lora_adapters_lt)))
+                    request.registered_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+                
+                request.active_lora_adapters = {}
+                for lora_id in self.list_active_loras():
+                    lora_name = self.lora_id_name_map.get(lora_id, "unknown")
+                    request.active_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
 
         
 

@@ -286,6 +286,9 @@ class Worker(LocalOrDistributedWorkerBase):
 
     def list_loras(self) -> Set[int]:
         return self.model_runner.list_loras()
+    
+    def list_active_loras(self) -> Set[int]:
+        return self.model_runner.list_active_loras()
 
     @property
     def max_model_len(self) -> int:

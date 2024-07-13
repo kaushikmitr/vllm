@@ -172,10 +172,16 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
         request, raw_request)
     custom_headers = {}
     if hasattr(generator, 'usage') and generator.usage:
+        if generator.usage.registered_lora_adapters is not None:
+            custom_headers["registered_lora_adapters"] = json.dumps(generator.usage.registered_lora_adapters)
+            orca_registered_lora_adapters = dict_to_orca(generator.usage.registered_lora_adapters)
+            custom_headers["orca_registered_lora_adapters"] = base64.b64encode(orca_registered_lora_adapters).decode('utf-8')
+            
         if generator.usage.active_lora_adapters is not None:
             custom_headers["active_lora_adapters"] = json.dumps(generator.usage.active_lora_adapters)
             orca_active_lora_adapters = dict_to_orca(generator.usage.active_lora_adapters)
             custom_headers["orca_active_lora_adapters"] = base64.b64encode(orca_active_lora_adapters).decode('utf-8')
+            
         if generator.usage.pending_queue_size is not None:
             custom_headers["pending_queue_size"] = str(generator.usage.pending_queue_size)
             orca_pending_queue_size = int_to_orca(generator.usage.pending_queue_size)

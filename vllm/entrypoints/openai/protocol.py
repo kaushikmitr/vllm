@@ -96,6 +96,7 @@ class UsageInfo(OpenAIBaseModel):
     total_tokens: int = 0
     completion_tokens: Optional[int] = 0
     active_lora_adapters:Optional[dict] = {}
+    registered_lora_adapters:Optional[dict] = {}
     pending_queue_size: int = 0
 
 

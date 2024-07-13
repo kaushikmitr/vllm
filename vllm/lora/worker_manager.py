@@ -78,6 +78,10 @@ class AbstractWorkerLoRAManager(ABC):
     @abstractmethod
     def list_loras(self) -> Set[int]:
         ...
+        
+    @abstractmethod
+    def list_active_loras(self) -> Set[int]:
+        ...
 
 
 class WorkerLoRAManager(AbstractWorkerLoRAManager):
@@ -229,6 +233,9 @@ class WorkerLoRAManager(AbstractWorkerLoRAManager):
 
     def list_loras(self) -> Set[int]:
         return set(self._lora_manager.list_loras())
+    
+    def list_active_loras(self) -> Set[int]:
+        return set(self._lora_manager.list_active_loras())
 
 
 class LRUCacheWorkerLoRAManager(WorkerLoRAManager):

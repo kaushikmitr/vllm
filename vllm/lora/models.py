@@ -562,6 +562,10 @@ class LoRAModelManager:
     def list_loras(self) -> Dict[int, LoRAModel]:
         """List all registered LoRAModels."""
         return dict(self._registered_loras)
+    
+    def list_active_loras(self) -> Dict[int, LoRAModel]:
+        """List all active LoRAModels."""
+        return dict(self._active_loras)
 
     def get_lora(self, lora_id: int) -> Optional[LoRAModel]:
         return self._registered_loras.get(lora_id, None)
@@ -749,6 +753,10 @@ class LRUCacheLoRAModelManager(LoRAModelManager):
     def list_loras(self) -> Dict[int, LoRAModel]:
         """List all registered LoRAModels."""
         return dict(self._registered_loras.cache)
+    
+    def list_active_loras(self) -> Dict[int, LoRAModel]:
+        """List all registered LoRAModels."""
+        return dict(self._active_loras.cache)
 
     def add_lora(self, lora: LoRAModel) -> bool:
         """Add a LoRAModel to the manager."""

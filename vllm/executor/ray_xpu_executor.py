@@ -257,6 +257,9 @@ class RayXPUExecutor(DistributedGPUExecutor):
 
     def list_loras(self) -> Set[int]:
         return self._run_workers("list_loras")
+    
+    def list_active_loras(self) -> Set[int]:
+        return self._run_workers("list_active_loras")
 
     def _run_workers(
         self,

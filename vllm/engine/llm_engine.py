@@ -163,6 +163,7 @@ class LLMEngine:
         log_stats: bool,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
         lora_id_name_map: dict = {},
+        registered_lora_adapters: dict = {},
         active_lora_adapters: dict = {}
     ) -> None:
         logger.info(
@@ -221,6 +222,7 @@ class LLMEngine:
         self.log_stats = log_stats
         self.lora_id_name_map = lora_id_name_map
         self.active_lora_adapters = active_lora_adapters
+        self.registered_lora_adapters = registered_lora_adapters
 
         if not self.model_config.skip_tokenizer_init:
             self.tokenizer = self._init_tokenizer()
@@ -828,14 +830,21 @@ class LLMEngine:
         
         for request in request_outputs:
             if request.finished:
-                request.pending_queue_size = len(self.scheduler.waiting)
-                active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
-                active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-                request.active_lora_adapters = {}
+                request.pending_queue_size = len(self.scheduler.waiting) + len(self.scheduler.running)
+                
+                pending_lora_adapters = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
+                pending_lora_adapters.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
+                pending_lora_adapters_dict = dict(Counter(pending_lora_adapters))
+                
+                request.registered_lora_adapters = {}
                 for lora_id in self.list_loras():
                     lora_name = self.lora_id_name_map.get(lora_id, "unknown")
-                    request.active_lora_adapters[lora_name] = 0
-                request.active_lora_adapters.update(dict(Counter(active_lora_adapters_lt)))
+                    request.registered_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+                
+                request.active_lora_adapters = {}
+                for lora_id in self.list_active_loras():
+                    lora_name = self.lora_id_name_map.get(lora_id, "unknown")
+                    request.active_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
 
@@ -882,13 +891,21 @@ class LLMEngine:
         num_waiting_sys = len(self.scheduler.waiting)
 
         #lora specific
-        active_lora_adapters_lt = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
-        active_lora_adapters_lt.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
-        active_lora_adapters = {}
+        pending_lora_adapters = [x.lora_request.lora_name  for x in self.scheduler.running if x.lora_request]
+        pending_lora_adapters.extend([x.lora_request.lora_name for x in self.scheduler.waiting if x.lora_request])
+        pending_lora_adapters_dict = dict(collectionsCounter(pending_lora_adapters))
+        
+        registered_lora_adapters = {}
         for lora_id in self.list_loras():
                     lora_name = self.lora_id_name_map[lora_id]
-                    active_lora_adapters[lora_name] = 0
-        active_lora_adapters.update(dict(collectionsCounter(active_lora_adapters_lt)))
+                    registered_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+
+        
+        active_lora_adapters = {}
+        for lora_id in self.list_active_loras():
+                    lora_name = self.lora_id_name_map[lora_id]
+                    active_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+        
         
         # KV Cache Usage in %
         num_total_gpu = self.cache_config.num_gpu_blocks
@@ -1012,6 +1029,7 @@ class LLMEngine:
             num_waiting_sys=num_waiting_sys,
             # lora specific
             active_lora_adapters=active_lora_adapters,
+            registered_lora_adapters = registered_lora_adapters,
             #   KV Cache Usage in %
             gpu_cache_usage_sys=gpu_cache_usage_sys,
             cpu_cache_usage_sys=cpu_cache_usage_sys,
@@ -1043,6 +1061,9 @@ class LLMEngine:
 
     def list_loras(self) -> Set[int]:
         return self.model_executor.list_loras()
+    
+    def list_active_loras(self) -> Set[int]:
+        return self.model_executor.list_active_loras()
 
     def pin_lora(self, lora_id: int) -> bool:
         return self.model_executor.pin_lora(lora_id)
