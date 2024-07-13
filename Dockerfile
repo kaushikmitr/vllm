@@ -175,12 +175,12 @@ RUN mv vllm test_docs/
 #################### OPENAI API SERVER ####################
 # openai api server alternative
 FROM vllm-base AS vllm-openai
-RUN huggingface-cli login --token *******
+RUN huggingface-cli login --token ******
 # install additional dependencies for openai api server
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install accelerate hf_transfer modelscope
 
 ENV VLLM_USAGE_SOURCE production-docker-image
 
-ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server", "--model", "meta-llama/Llama-2-7b-hf","--tensor-parallel-size", "1","--port", "8000", "--disable-log-requests","--enable-lora","--max-loras", "4", "--max-cpu-loras", "12", "--lora-modules", "sql-lora=/lora-sql/","tweet-summary=/lora-tweet/", "sql-lora-0=/lora-sql-0/","tweet-summary-0=/lora-tweet-0/", "sql-lora-1=/lora-sql-1/","tweet-summary-1=/lora-tweet-1/", "sql-lora-2=/lora-sql-2/","tweet-summary-2=/lora-tweet-2/", "sql-lora-3=/lora-sql-3/","tweet-summary-3=/lora-tweet-3/", "sql-lora-4=/lora-sql-4/","tweet-summary-4=/lora-tweet-4/"]
+ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server", "--model", "meta-llama/Llama-2-7b-hf","--tensor-parallel-size", "1","--port", "8000", "--disable-log-requests","--enable-lora","--max-loras", "5", "--max-cpu-loras", "12", "--lora-modules", "sql-lora=/lora-sql/","tweet-summary=/lora-tweet/", "sql-lora-0=/lora-sql-0/","tweet-summary-0=/lora-tweet-0/", "sql-lora-1=/lora-sql-1/","tweet-summary-1=/lora-tweet-1/", "sql-lora-2=/lora-sql-2/","tweet-summary-2=/lora-tweet-2/", "sql-lora-3=/lora-sql-3/","tweet-summary-3=/lora-tweet-3/", "sql-lora-4=/lora-sql-4/","tweet-summary-4=/lora-tweet-4/"]
 #################### OPENAI API SERVER ####################
