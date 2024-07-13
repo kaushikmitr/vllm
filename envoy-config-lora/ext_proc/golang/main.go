@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"encoding/json"
 	"math"
+	"math/rand"
 
 	"github.com/coocood/freecache"
 	"github.com/prometheus/common/expfmt"
@@ -252,36 +253,55 @@ func FindTargetPod(loraMetrics []ActiveLoraModelMetrics, requestMetrics []Pendin
 		}
 	}
 
-	// If no metrics found for the requested model, choose the pod with the least active adapters
+	// If no metrics found for the requested model, choose the pod with the least active adapters randomly
 	if len(relevantMetrics) == 0 {
-		minActiveAdapter := math.MaxInt
+		minActiveAdapters := math.MaxInt
+		var podsWithLeastAdapters []PendingRequestActiveAdaptersMetrics
 		for _, reqMetric := range requestMetrics {
-			if minActiveAdapter > reqMetric.NumberOfActiveAdapters {
-				minActiveAdapter = reqMetric.NumberOfActiveAdapters
-				targetPod = reqMetric.PodName
+			if reqMetric.NumberOfActiveAdapters < minActiveAdapters {
+				minActiveAdapters = reqMetric.NumberOfActiveAdapters
+				podsWithLeastAdapters = []PendingRequestActiveAdaptersMetrics{}
+			}
+			if reqMetric.NumberOfActiveAdapters == minActiveAdapters {
+				podsWithLeastAdapters = append(podsWithLeastAdapters, reqMetric)
 			}
 		}
-		if targetPod == "" {
+
+		if len(podsWithLeastAdapters) == 0 {
 			fmt.Println("Error: No pod with min adapter found")
 		} else {
+			targetPod = podsWithLeastAdapters[rand.Intn(len(podsWithLeastAdapters))].PodName
 			fmt.Printf("Selected pod with the least active adapters: %s\n", targetPod)
 		}
 		return targetPod
 	}
 
-	// Find the pod with the least active Lora adapters among the relevant metrics
-	minActiveLoraAdapters := math.MaxInt
+	// Find the pod with the highest active Lora adapters among the relevant metrics
+	maxActiveLoraAdapters := -1
+	var bestPods []ActiveLoraModelMetrics
 	for _, metric := range relevantMetrics {
-		fmt.Printf("Checking pod: %s, model: %s, active Lora adapters: %d\n", metric.PodName, metric.ModelName, metric.ActiveLoraAdapters)
-		if metric.ActiveLoraAdapters < minActiveLoraAdapters {
-			minActiveLoraAdapters = metric.ActiveLoraAdapters
-			targetPod = metric.PodName
-			fmt.Printf("New best pod found: %s with %d active Lora adapters\n", targetPod, minActiveLoraAdapters)
-		}
+			if metric.ModelName == loraAdapterRequested {
+				if metric.ActiveLoraAdapters > maxActiveLoraAdapters {
+					maxActiveLoraAdapters = metric.ActiveLoraAdapters
+					bestPods = []ActiveLoraModelMetrics{}
+				}
+				if metric.ActiveLoraAdapters == maxActiveLoraAdapters {
+					bestPods = append(bestPods, metric)
+				}
+			}
 	}
 
+	if len(bestPods) > 0 {
+		rand.Seed(time.Now().UnixNano())
+		targetPod = bestPods[rand.Intn(len(bestPods))].PodName
+		fmt.Printf("Selected pod with the highest ActiveLoraAdapters: %s\n", targetPod)
+	} else {
+
+			fmt.Printf("No pods match the requested model: %s\n")
+		}
+
 	// If the number of active Lora adapters in the selected pod is greater than the threshold, choose the pod with the least requests
-	if minActiveLoraAdapters > threshold && bestAlternativePod != "" {
+	if maxActiveLoraAdapters > threshold && bestAlternativePod != "" {
 		targetPod = bestAlternativePod
 		fmt.Printf("Selected pod's active Lora adapters exceed threshold, selecting the best alternative pod: %s with %d pending requests\n", targetPod, minAltRequests)
 	}
@@ -489,19 +509,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 
 			// Increment PendingRequests and update ActiveLoraAdapters if needed
 			if targetPod != "" {
-				requestMetric, err := getCachePendingRequestActiveAdapters(targetPod)
-				if err == nil {
-					requestMetric.PendingRequests++
-					if lora_adapter_requested != "" {
-						requestMetric.NumberOfActiveAdapters++
-					}
-					if err := setCachePendingRequestActiveAdapters(*requestMetric); err != nil {
-						log.Printf("Error updating PendingRequestActiveAdapters cache for pod %s: %v", targetPod, err)
-					}
-				} else if err != freecache.ErrNotFound {
-					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", targetPod, err)
-				}
-
+				var newAdapterRequest bool = false
 				if lora_adapter_requested != "" {
 					loraMetric, err := getCacheActiveLoraModel(targetPod, lora_adapter_requested)
 					if err == nil {
@@ -517,12 +525,25 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 							ModelName:          lora_adapter_requested,
 							ActiveLoraAdapters: 1,
 						}
+						newAdapterRequest = true
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
 							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
 						}
 					} else {
 						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
 					}
+				}
+				requestMetric, err := getCachePendingRequestActiveAdapters(targetPod)
+				if err == nil {
+					requestMetric.PendingRequests++
+					if newAdapterRequest != false {
+						requestMetric.NumberOfActiveAdapters++
+					}
+					if err := setCachePendingRequestActiveAdapters(*requestMetric); err != nil {
+						log.Printf("Error updating PendingRequestActiveAdapters cache for pod %s: %v", targetPod, err)
+					}
+				} else if err != freecache.ErrNotFound {
+					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", targetPod, err)
 				}
 			}
 			bodyMode := filterPb.ProcessingMode_BUFFERED
