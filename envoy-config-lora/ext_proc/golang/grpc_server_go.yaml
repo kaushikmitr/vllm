@@ -17,6 +17,11 @@ spec:
       containers:
       - name: grpc-server
         image: us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/grpc-vllm-lora-go:latest
+        args:
+        - -pods
+        - "vllm-0,vllm-1,vllm-2"
+        - -podIPs
+        - "vllm-0.vllm-lora.default.svc.cluster.local:8000,vllm-1.vllm-lora.default.svc.cluster.local:8000,vllm-2.vllm-lora.default.svc.cluster.local:8000"  
         ports:
         - containerPort: 50051
       - name: curl

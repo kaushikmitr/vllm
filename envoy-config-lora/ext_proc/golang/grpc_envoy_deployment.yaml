@@ -28,8 +28,6 @@ spec:
         - name: envoy-config
           mountPath: /etc/envoy
           readOnly: true
-        - name: certs
-          mountPath: /etc/ssl/envoy
       - name: curl
         image: curlimages/curl
         command: ["sleep", "3600"]
@@ -37,7 +35,4 @@ spec:
       - name: envoy-config
         configMap:
           name: envoy-config
-      - name: certs
-        secret:
-          secretName: envoy-certs
 

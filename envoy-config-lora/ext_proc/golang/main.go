@@ -2,6 +2,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"flag"
 	"io"
 	"log"
 	"net"
@@ -34,11 +35,12 @@ import (
 var (
 	cacheActiveLoraModel              *freecache.Cache
 	cachePendingRequestActiveAdapters *freecache.Cache
-		pods = []string{
-		"vllm-0.vllm-lora.default.svc.cluster.local",
-		"vllm-1.vllm-lora.default.svc.cluster.local",
-		"vllm-2.vllm-lora.default.svc.cluster.local",
-	}
+	pods                              []string
+	podIPMap                          map[string]string
+		//pods = []string{
+		//"vllm-0.vllm-lora.default.svc.cluster.local",
+		//"vllm-1.vllm-lora.default.svc.cluster.local",
+		//"vllm-2.vllm-lora.default.svc.cluster.local",
 	interval = 30 * time.Second // Update interval for fetching metrics
 )
 
@@ -70,8 +72,12 @@ type PendingRequestActiveAdaptersMetrics struct {
 
 func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg *sync.WaitGroup) {
 	defer wg.Done()
-
-	url := fmt.Sprintf("http://%s:8000/metrics", pod)
+	ip, exists := podIPMap[pod]
+	if !exists{
+		log.Printf("pod %s has no corresponding ip defined", pod)
+		return
+	}
+	url := fmt.Sprintf("http://%s/metrics", ip)
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Printf("failed to fetch metrics from %s: %v", pod, err)
@@ -120,7 +126,12 @@ func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg 
 func fetchRequestMetricsFromPod(pod string, ch chan<- []PendingRequestActiveAdaptersMetrics, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	url := fmt.Sprintf("http://%s:8000/metrics", pod)
+	ip, exists := podIPMap[pod]
+	if !exists{
+		log.Printf("pod %s has no corresponding ip defined", pod)
+		return
+	}
+	url := fmt.Sprintf("http://%s/metrics", ip)
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Printf("failed to fetch metrics from %s: %v", pod, err)
@@ -276,7 +287,7 @@ func FindTargetPod(loraMetrics []ActiveLoraModelMetrics, requestMetrics []Pendin
 		return targetPod
 	}
 
-	// Find the pod with the highest active Lora adapters among the relevant metrics
+	// Find the pod with the max lora requests among the relevant metrics
 	maxActiveLoraAdapters := -1
 	var bestPods []ActiveLoraModelMetrics
 	for _, metric := range relevantMetrics {
@@ -563,7 +574,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 									{
 										Header: &configPb.HeaderValue{
 											Key:   "target_pod",
-											Value: extractPodName(targetPod),
+											Value: targetPod,
 										},
 									},
 
@@ -722,6 +733,25 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 }
 
 func main() {
+	podsFlag := flag.String("pods", "", "Comma-separated list of pod addresses")
+	podIPsFlag := flag.String("podIPs", "", "Comma-separated list of pod IPs")
+	flag.Parse()
+
+	if *podsFlag == "" || *podIPsFlag == "" {
+		log.Fatal("No pods or pod IPs provided. Use the -pods and -podIPs flags to specify comma-separated lists of pod addresses and pod IPs.")
+	}
+
+	pods = strings.Split(*podsFlag, ",")
+	podIPs := strings.Split(*podIPsFlag, ",")
+
+	if len(pods) != len(podIPs) {
+		log.Fatal("The number of pod addresses and pod IPs must match.")
+	}
+
+	podIPMap = make(map[string]string)
+	for i := range pods {
+		podIPMap[pods[i]] = podIPs[i]
+	}
 
 	// cache init
 	cacheActiveLoraModel = freecache.NewCache(1024)
