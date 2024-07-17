@@ -1,0 +1,17 @@
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: ext-proc-lora
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: vllm-route
+  extProc:
+    - backendRefs:
+        - name: grpc-ext-proc
+          port: 9002
+      processingMode:
+        request: {}
+        response: {}
