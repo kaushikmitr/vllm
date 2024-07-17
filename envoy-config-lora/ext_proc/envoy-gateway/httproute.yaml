@@ -1,3 +1,4 @@
+
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -15,6 +16,9 @@ spec:
     - name: vllm-0
       port: 8000
       kind: Service
+    timeouts:
+      request: "1000s"
+      backendRequest: "1000s"
   - matches:
     - headers:
       - name: target-pod
@@ -23,6 +27,9 @@ spec:
     - name: vllm-1
       port: 8000
       kind: Service
+    timeouts:
+      request: "1000s"
+      backendRequest: "1000s"
   - matches:
     - headers:
       - name: target-pod
@@ -31,7 +38,13 @@ spec:
     - name: vllm-2
       port: 8000
       kind: Service
+    timeouts:
+      request: "1000s"
+      backendRequest: "1000s"
   - backendRefs:
     - name: vllm-0
       port: 8000
       kind: Service
+    timeouts:
+      request: "1000s"
+      backendRequest: "1000s"
