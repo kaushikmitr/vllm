@@ -463,46 +463,71 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 		switch v := req.Request.(type) {
 
 		case *extProcPb.ProcessingRequest_RequestHeaders:
-
 			log.Println("--- In RequestHeaders processing ...")
 			r := req.Request
 			h := r.(*extProcPb.ProcessingRequest_RequestHeaders)
 
-			//log.Printf("Request: %+v\n", r)
 			log.Printf("Headers: %+v\n", h)
 			log.Printf("EndOfStream: %v\n", h.RequestHeaders.EndOfStream)
 
-			// List of backend pod addresses. Replace with actual pod addresses or make configurable.
-			//fmt.Printf("Pods to check: %v\n", pods)
-			
+			bodyMode := filterPb.ProcessingMode_BUFFERED
 
-			for _, n := range h.RequestHeaders.Headers.Headers {
-				//if strings.ToLower(n.Key) == "content-type" {
-				//	contentType = n.Value
-				//}
-				if strings.ToLower(n.Key) == "lora-adapter" {
-					lora_adapter_requested = n.Value
-				}
-				if strings.ToLower(n.Key) == "threshold" {
-					t, err := strconv.Atoi(n.Value)
-					if err != nil {
-						fmt.Printf("Error converting threshold value: %n.Value\n", err)
-					} else {
-						threshold = t
-					}
-
-				}
+			resp = &extProcPb.ProcessingResponse{
+				Response: &extProcPb.ProcessingResponse_RequestHeaders{
+					RequestHeaders: &extProcPb.HeadersResponse{
+						Response: &extProcPb.CommonResponse{
+							HeaderMutation: &extProcPb.HeaderMutation{
+								SetHeaders: []*configPb.HeaderValueOption{
+									{
+										Header: &configPb.HeaderValue{
+											Key:   "x-went-into-req-headers",
+											Value: "true",
+										},
+									},
+								},
+							},
+							ClearRouteCache: true,
+						},
+					},
+				},
+				ModeOverride: &filterPb.ProcessingMode{
+					ResponseHeaderMode: filterPb.ProcessingMode_SEND,
+					RequestBodyMode:    bodyMode,
+				},
 			}
+
+			break
+
+		case *extProcPb.ProcessingRequest_RequestBody:
+			log.Println("--- In RequestBody processing")
+
+			var requestBody map[string]interface{}
+			if err := json.Unmarshal(v.RequestBody.Body, &requestBody); err != nil {
+				log.Printf("Error unmarshaling request body: %v", err)
+				break
+			}
+
+			loraAdapterRequested, ok := requestBody["model"].(string)
+			if !ok {
+				log.Println("model/lora-adapter not found in request body")
+				break
+			}
+
+			thresholdValue, ok := requestBody["threshold"].(float64)
+			if ok {
+				threshold = int(thresholdValue)
+			}
+
 			// Retrieve metrics from cache
 			var loraMetrics []ActiveLoraModelMetrics
 			var requestMetrics []PendingRequestActiveAdaptersMetrics
 
 			for _, pod := range pods {
-				loraMetric, err := getCacheActiveLoraModel(pod, lora_adapter_requested)
+				loraMetric, err := getCacheActiveLoraModel(pod, loraAdapterRequested)
 				if err == nil {
 					loraMetrics = append(loraMetrics, *loraMetric)
 				} else if err != freecache.ErrNotFound {
-					log.Printf("Error fetching cacheActiveLoraModel for pod %s and lora_adapter_requested %s: %v", pod, lora_adapter_requested, err)
+					log.Printf("Error fetching cacheActiveLoraModel for pod %s and lora_adapter_requested %s: %v", pod, loraAdapterRequested, err)
 				}
 
 				requestMetric, err := getCachePendingRequestActiveAdapters(pod)
@@ -510,38 +535,39 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 					requestMetrics = append(requestMetrics, *requestMetric)
 				} else if err != freecache.ErrNotFound {
 					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", pod, err)
+					break
 				}
 			}
 
 			fmt.Printf("Fetched loraMetrics: %+v\n", loraMetrics)
 			fmt.Printf("Fetched requestMetrics: %+v\n", requestMetrics)
-			targetPod = FindTargetPod(loraMetrics, requestMetrics, lora_adapter_requested, threshold)
+			targetPod = FindTargetPod(loraMetrics, requestMetrics, loraAdapterRequested, threshold)
 			fmt.Printf("Selected target pod: %s\n", targetPod)
 
 			// Increment PendingRequests and update ActiveLoraAdapters if needed
 			if targetPod != "" {
 				var newAdapterRequest bool = false
-				if lora_adapter_requested != "" {
-					loraMetric, err := getCacheActiveLoraModel(targetPod, lora_adapter_requested)
+				if loraAdapterRequested != "" {
+					loraMetric, err := getCacheActiveLoraModel(targetPod, loraAdapterRequested)
 					if err == nil {
 						loraMetric.ActiveLoraAdapters++
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
-							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 						}
 					} else if err == freecache.ErrNotFound {
 						// Create new metric if not found in cache
 						loraMetric = &ActiveLoraModelMetrics{
 							Date:               time.Now().Format(time.RFC3339),
 							PodName:            targetPod,
-							ModelName:          lora_adapter_requested,
+							ModelName:          loraAdapterRequested,
 							ActiveLoraAdapters: 1,
 						}
 						newAdapterRequest = true
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
-							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 						}
 					} else {
-						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 					}
 				}
 				requestMetric, err := getCachePendingRequestActiveAdapters(targetPod)
@@ -557,58 +583,6 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", targetPod, err)
 				}
 			}
-			bodyMode := filterPb.ProcessingMode_BUFFERED
-
-			resp = &extProcPb.ProcessingResponse{
-				Response: &extProcPb.ProcessingResponse_RequestHeaders{
-					RequestHeaders: &extProcPb.HeadersResponse{
-						Response: &extProcPb.CommonResponse{
-							HeaderMutation: &extProcPb.HeaderMutation{
-								SetHeaders: []*configPb.HeaderValueOption{
-									{
-										Header: &configPb.HeaderValue{
-											Key:   "x-went-into-req-headers",
-											Value: "true",
-										},
-									},
-									{
-										Header: &configPb.HeaderValue{
-											Key:   "target_pod",
-											Value: targetPod,
-										},
-									},
-
-								},
-							},
-							ClearRouteCache: true,
-						},
-					},
-				},
-				ModeOverride: &filterPb.ProcessingMode{
-					ResponseHeaderMode: filterPb.ProcessingMode_SEND,
-					RequestBodyMode:    bodyMode,
-				},
-			}
-
-			// Print final headers being sent
-			fmt.Println("Final headers being sent:")
-			for _, header := range resp.GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders() {
-				fmt.Printf("%s: %s\n", header.GetHeader().GetKey(), header.GetHeader().GetValue())
-			}
-
-			break
-
-		case *extProcPb.ProcessingRequest_RequestBody:
-
-			log.Println("--- In RequestBody processing")
-			//r := req.Request
-			//b := r.(*extProcPb.ProcessingRequest_RequestBody)
-
-			//log.Printf("Request: %+v\n", r)
-			//log.Printf("Body: %+v\n", b)
-			//log.Printf("EndOfStream: %v\n", b.RequestBody.EndOfStream)
-			//log.Printf("Content Type: %v\n", contentType)
-			//log.Printf("target pod: %v\n", targetPod)
 
 			resp = &extProcPb.ProcessingResponse{
 				Response: &extProcPb.ProcessingResponse_RequestBody{
@@ -622,6 +596,12 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 											Value: "true",
 										},
 									},
+									{
+										Header: &configPb.HeaderValue{
+											Key:   "target_pod",
+											Value: targetPod,
+										},
+									},
 								},
 							},
 						},
@@ -630,6 +610,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			}
 
 			break
+
 
 		case *extProcPb.ProcessingRequest_ResponseHeaders:
 
