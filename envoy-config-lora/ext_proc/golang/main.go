@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/rand"
 
+
 	"github.com/coocood/freecache"
 	"github.com/prometheus/common/expfmt"
 	"google.golang.org/grpc"
@@ -29,6 +30,7 @@ import (
 	configPb "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	filterPb "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	envoyTypePb "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	healthPb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
@@ -69,7 +71,14 @@ type PendingRequestActiveAdaptersMetrics struct {
 	NumberOfActiveAdapters int
 }
 
-
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
 func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg *sync.WaitGroup) {
 	defer wg.Done()
 	ip, exists := podIPMap[pod]
@@ -103,7 +112,7 @@ func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg 
 	for name, mf := range metricFamilies {
 		if name == "vllm:active_lora_adapters" {
 			for _, m := range mf.GetMetric() {
-				modelName := getLabelValue(m, "dict_key")
+				modelName := getLabelValue(m, "active_lora_adapters")
 				activeLoraAdapters := int(m.GetGauge().GetValue())
 				modelsDict[modelName] = activeLoraAdapters
 			}
@@ -432,7 +441,6 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 	ctx := srv.Context()
 
 	//contentType := ""
-	lora_adapter_requested := ""
 	threshold := 100000
 	targetPod := "vllm-x"
 
@@ -544,8 +552,17 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			targetPod = FindTargetPod(loraMetrics, requestMetrics, loraAdapterRequested, threshold)
 			fmt.Printf("Selected target pod: %s\n", targetPod)
 
-			// Increment PendingRequests and update ActiveLoraAdapters if needed
-			if targetPod != "" {
+			if !contains(pods, targetPod) {
+				resp = &extProcPb.ProcessingResponse{
+					Response: &extProcPb.ProcessingResponse_ImmediateResponse{
+						ImmediateResponse: &extProcPb.ImmediateResponse{
+							Status: &envoyTypePb.HttpStatus{
+								Code: envoyTypePb.StatusCode_NotFound,
+							},
+						},
+					},
+				}
+			} else {
 				var newAdapterRequest bool = false
 				if loraAdapterRequested != "" {
 					loraMetric, err := getCacheActiveLoraModel(targetPod, loraAdapterRequested)

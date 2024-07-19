@@ -142,13 +142,13 @@ class Metrics:
         
         self.gauge_scheduler_registered_lora_adapters = Gauge(
             name="vllm:registered_lora_adapters",
-            documentation="Active lora adapters.",
-            labelnames=labelnames + ["dict_key"])
+            documentation="Registered lora adapters.",
+            labelnames=labelnames + ["registered_lora_adapters"])
         
         self.gauge_scheduler_active_lora_adapters = Gauge(
             name="vllm:active_lora_adapters",
             documentation="Active lora adapters.",
-            labelnames=labelnames + ["dict_key"])
+            labelnames=labelnames + ["active_lora_adapters"])
 
 # end-metrics-definitions
 
@@ -281,10 +281,10 @@ class StatLogger:
         self._log_histogram(self.metrics.histogram_e2e_time_request,
                             stats.time_e2e_requests)
         
-        self._log_dict_metric(self.metrics.gauge_scheduler_registered_lora_adapters,
+        self._log_dict_metric("registered_lora_adapters",self.metrics.gauge_scheduler_registered_lora_adapters,
                         stats.registered_lora_adapters)  # lora specific
         
-        self._log_dict_metric(self.metrics.gauge_scheduler_active_lora_adapters,
+        self._log_dict_metric("active_lora_adapters",self.metrics.gauge_scheduler_active_lora_adapters,
                         stats.active_lora_adapters)  # lora specific
         
         # Metadata
@@ -336,10 +336,10 @@ class StatLogger:
         self.metrics.gauge_avg_generation_throughput.labels(
             **self.labels).set(generation_throughput)
         
-    def _log_dict_metric(self, gauge: Gauge, data: Dict[str, Union[int, float]]) -> None:
+    def _log_dict_metric(self, label_key: str, gauge: Gauge, data: Dict[str, Union[int, float]]) -> None:
         for key, value in data.items():
             labels = self.labels.copy()
-            labels["dict_key"] = key
+            labels[label_key] = key
             gauge.labels(**labels).set(value)
 
     def log(self, stats: Stats) -> None:
