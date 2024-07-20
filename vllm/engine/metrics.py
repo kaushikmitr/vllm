@@ -35,6 +35,10 @@ class Metrics:
         self.info_cache_config = Info(
             name='vllm:cache_config',
             documentation='information of cache_config')
+        
+        self.info_active_adapters = Info(
+            name='vllm:info_active_adapters',
+            documentation='information of active_adapters')
 
         # System stats
         #   Scheduler State
@@ -287,6 +291,9 @@ class StatLogger:
         self._log_dict_metric("active_lora_adapters",self.metrics.gauge_scheduler_active_lora_adapters,
                         stats.active_lora_adapters)  # lora specific
         
+        # Publish active adapters info
+        self._publish_active_adapters_info(stats.active_lora_adapters)
+        
         # Metadata
         finished_reason_counter = CollectionsCounter(
             stats.finished_reason_requests)
@@ -301,6 +308,10 @@ class StatLogger:
         self._log_histogram(self.metrics.histogram_n_request, stats.n_requests)
         self._log_histogram(self.metrics.histogram_best_of_request,
                             stats.best_of_requests)
+        
+    def _publish_active_adapters_info(self, active_adapters: dict) -> None:
+        adapter_keys = ','.join(active_adapters.keys())
+        self.metrics.info_active_adapters.info({'active_adapters': adapter_keys})
 
     def _log_gauge(self, gauge: Gauge, data: Union[int, float]) -> None:
         # Convenience function for logging to gauge.
@@ -341,6 +352,7 @@ class StatLogger:
             labels = self.labels.copy()
             labels[label_key] = key
             gauge.labels(**labels).set(value)
+
 
     def log(self, stats: Stats) -> None:
         """Called by LLMEngine.

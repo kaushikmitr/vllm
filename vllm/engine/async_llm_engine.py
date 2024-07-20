@@ -243,11 +243,6 @@ class _AsyncLLMEngine(LLMEngine):
             output, scheduler_outputs.scheduled_seq_groups,
             scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
 
-        # Log stats.
-        self.do_log_stats(scheduler_outputs, output)
-
-        # Tracing
-        self.do_tracing(scheduler_outputs)
         
         for request in request_outputs:
             if request.finished:
@@ -260,13 +255,19 @@ class _AsyncLLMEngine(LLMEngine):
                 for lora_id in self.list_loras():
                     lora_name = self.lora_id_name_map.get(lora_id, "unknown")
                     request.registered_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+                self.registered_lora_adapters = request.registered_lora_adapters
                 
                 request.active_lora_adapters = {}
                 for lora_id in self.list_active_loras():
                     lora_name = self.lora_id_name_map.get(lora_id, "unknown")
                     request.active_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
-
+                self.active_lora_adapters = request.active_lora_adapters
         
+        # Log stats.
+        self.do_log_stats(scheduler_outputs, output)
+
+        # Tracing
+        self.do_tracing(scheduler_outputs)
 
         if not request_outputs:
             # Stop the execute model loop in parallel workers until there are

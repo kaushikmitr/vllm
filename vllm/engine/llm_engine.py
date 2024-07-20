@@ -840,11 +840,14 @@ class LLMEngine:
                 for lora_id in self.list_loras():
                     lora_name = self.lora_id_name_map.get(lora_id, "unknown")
                     request.registered_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+                self.registered_lora_adapters = request.registered_lora_adapters
+                
                 
                 request.active_lora_adapters = {}
                 for lora_id in self.list_active_loras():
                     lora_name = self.lora_id_name_map.get(lora_id, "unknown")
                     request.active_lora_adapters[lora_name] = pending_lora_adapters_dict.get(lora_name, 0)
+                self.active_lora_adapters  = request.active_lora_adapters
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
 

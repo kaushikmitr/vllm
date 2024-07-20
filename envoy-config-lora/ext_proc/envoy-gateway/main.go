@@ -1,9 +1,6 @@
 package main
-
-    import (
-    	"context"
-		"crypto/tls"
-		"crypto/x509"
+import (
+	"context"
 	"fmt"
 	"flag"
 	"io"
@@ -11,14 +8,17 @@ package main
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"strconv"
 	"encoding/json"
 	"math"
 	"math/rand"
+
 
 	"github.com/coocood/freecache"
 	"github.com/prometheus/common/expfmt"
@@ -30,24 +30,23 @@ package main
 	configPb "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	filterPb "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	envoyTypePb "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	healthPb "google.golang.org/grpc/health/grpc_health_v1"
+)
 
-    "google.golang.org/grpc/credentials"
-    )
+var (
+	cacheActiveLoraModel              *freecache.Cache
+	cachePendingRequestActiveAdapters *freecache.Cache
+	pods                              []string
+	podIPMap                          map[string]string
+		//pods = []string{
+		//"vllm-0.vllm-lora.default.svc.cluster.local",
+		//"vllm-1.vllm-lora.default.svc.cluster.local",
+		//"vllm-2.vllm-lora.default.svc.cluster.local",
+	interval = 30 * time.Second // Update interval for fetching metrics
+)
 
-    type extProcServer struct{}
-
-    var (
-    	port     int
-    	certPath string
-		cacheActiveLoraModel              *freecache.Cache
-		cachePendingRequestActiveAdapters *freecache.Cache
-		pods                              []string
-		podIPMap                          map[string]string
-		interval = 30 * time.Second // Update interval for fetching metrics
-    )
-
-	type server struct{}
+type server struct{}
 type healthServer struct{}
 
 func (s *healthServer) Check(ctx context.Context, in *healthPb.HealthCheckRequest) (*healthPb.HealthCheckResponse, error) {
@@ -58,31 +57,6 @@ func (s *healthServer) Check(ctx context.Context, in *healthPb.HealthCheckReques
 func (s *healthServer) Watch(in *healthPb.HealthCheckRequest, srv healthPb.Health_WatchServer) error {
 	return status.Error(codes.Unimplemented, "Watch is not implemented")
 }
-
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	certPool, err := loadCA(certPath)
-	if err != nil {
-		log.Fatalf("Could not load CA certificate: %v", err)
-	}
-
-	// Create TLS configuration
-	tlsConfig := &tls.Config{
-		RootCAs: certPool,
-		ServerName: "grpc-ext-proc.envoygateway",
-	}
-
-	// Create gRPC dial options
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-	}
-
-	conn, err := grpc.Dial("localhost:9002", opts...)
-	if err != nil {
-		log.Fatalf("Could not connect: %v", err)
-	}
-	_ = conn
-}
-
 type ActiveLoraModelMetrics struct {
 	Date               string
 	PodName            string
@@ -97,7 +71,14 @@ type PendingRequestActiveAdaptersMetrics struct {
 	NumberOfActiveAdapters int
 }
 
-
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
 func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg *sync.WaitGroup) {
 	defer wg.Done()
 	ip, exists := podIPMap[pod]
@@ -126,19 +107,34 @@ func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg 
 	}
 
 	var loraMetrics []ActiveLoraModelMetrics
+	var adapterList []string
 	modelsDict := make(map[string]int)
-
+	 
 	for name, mf := range metricFamilies {
 		if name == "vllm:active_lora_adapters" {
 			for _, m := range mf.GetMetric() {
-				modelName := getLabelValue(m, "dict_key")
+				modelName := getLabelValue(m, "active_lora_adapters")
 				activeLoraAdapters := int(m.GetGauge().GetValue())
 				modelsDict[modelName] = activeLoraAdapters
+			}
+		}
+		if name == "vllm:info_active_adapters_info" {
+			for _, metric := range mf.GetMetric() {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "active_adapters" {
+						if label.GetValue() != ""{
+							adapterList = strings.Split(label.GetValue(), ",")
+						}
+					}
+				}
 			}
 		}
 	}
 
 	for modelName, activeLoraAdapters := range modelsDict {
+		if !contains(adapterList, modelName){
+			continue
+		}
 		loraMetric := ActiveLoraModelMetrics{
 			Date:               time.Now().Format(time.RFC3339),
 			PodName:            pod,
@@ -193,13 +189,16 @@ func fetchRequestMetricsFromPod(pod string, ch chan<- []PendingRequestActiveAdap
 			for _, m := range mf.GetMetric() {
 				pendingRequests += int(m.GetGauge().GetValue())
 			}
-		case "vllm:active_lora_adapters":
-				for _, m := range mf.GetMetric() {
-					modelName := getLabelValue(m, "dict_key")
-					if modelName != ""{
-						adapterCount++
+		case "vllm:info_active_adapters_info":
+			for _, metric := range mf.GetMetric() {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "active_adapters" {
+						if label.GetValue() != ""{
+							adapterCount = len(strings.Split(label.GetValue(), ","))
+						}
 					}
 				}
+			}
 		}
 	}
 
@@ -460,9 +459,8 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 	ctx := srv.Context()
 
 	//contentType := ""
-	lora_adapter_requested := ""
 	threshold := 100000
-	targetPod := "vllm-x"
+	targetPod := ""
 
 	for {
 
@@ -491,85 +489,162 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 		switch v := req.Request.(type) {
 
 		case *extProcPb.ProcessingRequest_RequestHeaders:
-
 			log.Println("--- In RequestHeaders processing ...")
 			r := req.Request
 			h := r.(*extProcPb.ProcessingRequest_RequestHeaders)
 
-			//log.Printf("Request: %+v\n", r)
 			log.Printf("Headers: %+v\n", h)
 			log.Printf("EndOfStream: %v\n", h.RequestHeaders.EndOfStream)
 
-			// List of backend pod addresses. Replace with actual pod addresses or make configurable.
-			//fmt.Printf("Pods to check: %v\n", pods)
-			
-
 			for _, n := range h.RequestHeaders.Headers.Headers {
-				//if strings.ToLower(n.Key) == "content-type" {
-				//	contentType = n.Value
-				//}
-				if strings.ToLower(n.Key) == "lora-adapter" {
-					lora_adapter_requested = string(n.RawValue)
+				if strings.ToLower(n.Key) == "target-pod" {
+					targetPod = n.Value
 				}
-				if strings.ToLower(n.Key) == "threshold" {
-					t, err := strconv.Atoi(string(n.RawValue))
-					if err != nil {
-						fmt.Printf("Error converting threshold value: %n.RawValue\n", err)
-					} else {
-						threshold = t
+			}
+
+			if targetPod == ""{
+				bodyMode := filterPb.ProcessingMode_BUFFERED
+
+				resp = &extProcPb.ProcessingResponse{
+				Response: &extProcPb.ProcessingResponse_RequestHeaders{
+					RequestHeaders: &extProcPb.HeadersResponse{
+						Response: &extProcPb.CommonResponse{
+							HeaderMutation: &extProcPb.HeaderMutation{
+								SetHeaders: []*configPb.HeaderValueOption{
+									{
+										Header: &configPb.HeaderValue{
+											Key:   "x-went-into-req-headers",
+											Value: "true",
+										},
+									},
+								},
+							},
+							ClearRouteCache: true,
+						},
+					},
+				},
+				ModeOverride: &filterPb.ProcessingMode{
+					ResponseHeaderMode: filterPb.ProcessingMode_SEND,
+					RequestBodyMode:    bodyMode,
+				},
+			}
+		} else {
+			bodyMode := filterPb.ProcessingMode_NONE
+
+				resp = &extProcPb.ProcessingResponse{
+				Response: &extProcPb.ProcessingResponse_RequestHeaders{
+					RequestHeaders: &extProcPb.HeadersResponse{
+						Response: &extProcPb.CommonResponse{
+							HeaderMutation: &extProcPb.HeaderMutation{
+								SetHeaders: []*configPb.HeaderValueOption{
+									{
+										Header: &configPb.HeaderValue{
+											Key:   "x-went-into-req-headers",
+											Value: "true",
+										},
+									},
+									{
+										Header: &configPb.HeaderValue{
+											Key:   "target_pod",
+											Value: targetPod,
+										},
+									},
+								},
+							},
+							ClearRouteCache: true,
+						},
+					},
+				},
+				ModeOverride: &filterPb.ProcessingMode{
+					ResponseHeaderMode: filterPb.ProcessingMode_SEND,
+					RequestBodyMode:    bodyMode,
+				},
+			}
+		}
+			break
+
+		case *extProcPb.ProcessingRequest_RequestBody:
+			log.Println("--- In RequestBody processing")
+
+			var requestBody map[string]interface{}
+			if err := json.Unmarshal(v.RequestBody.Body, &requestBody); err != nil {
+				log.Printf("Error unmarshaling request body: %v", err)
+				break
+			}
+
+			loraAdapterRequested, ok := requestBody["model"].(string)
+			if !ok {
+				log.Println("model/lora-adapter not found in request body")
+				break
+			}
+
+			thresholdValue, ok := requestBody["threshold"].(float64)
+			if ok {
+				threshold = int(thresholdValue)
+			}
+
+			if targetPod == ""{
+				// Retrieve metrics from cache
+				var loraMetrics []ActiveLoraModelMetrics
+				var requestMetrics []PendingRequestActiveAdaptersMetrics
+
+				for _, pod := range pods {
+					loraMetric, err := getCacheActiveLoraModel(pod, loraAdapterRequested)
+					if err == nil {
+						loraMetrics = append(loraMetrics, *loraMetric)
+					} else if err != freecache.ErrNotFound {
+						log.Printf("Error fetching cacheActiveLoraModel for pod %s and lora_adapter_requested %s: %v", pod, loraAdapterRequested, err)
 					}
 
+					requestMetric, err := getCachePendingRequestActiveAdapters(pod)
+					if err == nil {
+						requestMetrics = append(requestMetrics, *requestMetric)
+					} else if err != freecache.ErrNotFound {
+						log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", pod, err)
+						break
+					}
 				}
+
+				fmt.Printf("Fetched loraMetrics: %+v\n", loraMetrics)
+				fmt.Printf("Fetched requestMetrics: %+v\n", requestMetrics)
+
+				targetPod = FindTargetPod(loraMetrics, requestMetrics, loraAdapterRequested, threshold)
 			}
-			// Retrieve metrics from cache
-			var loraMetrics []ActiveLoraModelMetrics
-			var requestMetrics []PendingRequestActiveAdaptersMetrics
-
-			for _, pod := range pods {
-				loraMetric, err := getCacheActiveLoraModel(pod, lora_adapter_requested)
-				if err == nil {
-					loraMetrics = append(loraMetrics, *loraMetric)
-				} else if err != freecache.ErrNotFound {
-					log.Printf("Error fetching cacheActiveLoraModel for pod %s and lora_adapter_requested %s: %v", pod, lora_adapter_requested, err)
-				}
-
-				requestMetric, err := getCachePendingRequestActiveAdapters(pod)
-				if err == nil {
-					requestMetrics = append(requestMetrics, *requestMetric)
-				} else if err != freecache.ErrNotFound {
-					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", pod, err)
-				}
-			}
-
-			fmt.Printf("Fetched loraMetrics: %+v\n", loraMetrics)
-			fmt.Printf("Fetched requestMetrics: %+v\n", requestMetrics)
-			targetPod = FindTargetPod(loraMetrics, requestMetrics, lora_adapter_requested, threshold)
 			fmt.Printf("Selected target pod: %s\n", targetPod)
 
-			// Increment PendingRequests and update ActiveLoraAdapters if needed
-			if targetPod != "" {
+			if !contains(pods, targetPod) {
+				resp = &extProcPb.ProcessingResponse{
+					Response: &extProcPb.ProcessingResponse_ImmediateResponse{
+						ImmediateResponse: &extProcPb.ImmediateResponse{
+							Status: &envoyTypePb.HttpStatus{
+								Code: envoyTypePb.StatusCode_NotFound,
+							},
+						},
+					},
+				}
+			} else {
 				var newAdapterRequest bool = false
-				if lora_adapter_requested != "" {
-					loraMetric, err := getCacheActiveLoraModel(targetPod, lora_adapter_requested)
+				if loraAdapterRequested != "" {
+					loraMetric, err := getCacheActiveLoraModel(targetPod, loraAdapterRequested)
 					if err == nil {
 						loraMetric.ActiveLoraAdapters++
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
-							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 						}
 					} else if err == freecache.ErrNotFound {
 						// Create new metric if not found in cache
 						loraMetric = &ActiveLoraModelMetrics{
 							Date:               time.Now().Format(time.RFC3339),
 							PodName:            targetPod,
-							ModelName:          lora_adapter_requested,
+							ModelName:          loraAdapterRequested,
 							ActiveLoraAdapters: 1,
 						}
 						newAdapterRequest = true
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
-							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 						}
 					} else {
-						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, lora_adapter_requested, err)
+						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 					}
 				}
 				requestMetric, err := getCachePendingRequestActiveAdapters(targetPod)
@@ -585,58 +660,6 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", targetPod, err)
 				}
 			}
-			bodyMode := filterPb.ProcessingMode_BUFFERED
-
-			resp = &extProcPb.ProcessingResponse{
-				Response: &extProcPb.ProcessingResponse_RequestHeaders{
-					RequestHeaders: &extProcPb.HeadersResponse{
-						Response: &extProcPb.CommonResponse{
-							HeaderMutation: &extProcPb.HeaderMutation{
-								SetHeaders: []*configPb.HeaderValueOption{
-									{
-										Header: &configPb.HeaderValue{
-											Key:   "x-went-into-req-headers",
-											RawValue: []byte("true"),
-										},
-									},
-									{
-										Header: &configPb.HeaderValue{
-											Key:   "target-pod",
-											RawValue: []byte(targetPod),
-										},
-									},
-
-								},
-							},
-							ClearRouteCache: true,
-						},
-					},
-				},
-				ModeOverride: &filterPb.ProcessingMode{
-					ResponseHeaderMode: filterPb.ProcessingMode_SEND,
-					RequestBodyMode:    bodyMode,
-				},
-			}
-
-			// Print final headers being sent
-			fmt.Println("Final headers being sent:")
-			for _, header := range resp.GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders() {
-				fmt.Printf("%s: %s\n", header.GetHeader().Key, header.GetHeader().RawValue)
-			}
-
-			break
-
-		case *extProcPb.ProcessingRequest_RequestBody:
-
-			log.Println("--- In RequestBody processing")
-			//r := req.Request
-			//b := r.(*extProcPb.ProcessingRequest_RequestBody)
-
-			//log.Printf("Request: %+v\n", r)
-			//log.Printf("Body: %+v\n", b)
-			//log.Printf("EndOfStream: %v\n", b.RequestBody.EndOfStream)
-			//log.Printf("Content Type: %v\n", contentType)
-			//log.Printf("target pod: %v\n", targetPod)
 
 			resp = &extProcPb.ProcessingResponse{
 				Response: &extProcPb.ProcessingResponse_RequestBody{
@@ -647,7 +670,13 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 									{
 										Header: &configPb.HeaderValue{
 											Key:   "x-went-into-req-body",
-											RawValue: []byte("true"),
+											Value: "true",
+										},
+									},
+									{
+										Header: &configPb.HeaderValue{
+											Key:   "target_pod",
+											Value: targetPod,
 										},
 									},
 								},
@@ -658,6 +687,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			}
 
 			break
+
 
 		case *extProcPb.ProcessingRequest_ResponseHeaders:
 
@@ -678,13 +708,13 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			for _, header := range h.ResponseHeaders.Headers.Headers {
 				switch header.Key {
 				case "active_lora_adapters":
-					err := json.Unmarshal(header.RawValue, &modelNames)
+					err := json.Unmarshal([]byte(header.Value), &modelNames)
 					if err != nil {
 						log.Printf("Error parsing model_names: %v", err)
 					}
 				case "pending_queue_size":
 					var err error
-					pendingQueueSize, err = strconv.Atoi(string(header.RawValue))
+					pendingQueueSize, err = strconv.Atoi(header.Value)
 					if err != nil {
 						log.Printf("Error converting pending_queue_size: %v", err)
 					}
@@ -732,13 +762,13 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 									{
 										Header: &configPb.HeaderValue{
 											Key:   "x-went-into-resp-headers",
-											RawValue: []byte("true"),
+											Value: "true",
 										},
 									},
 									{
 										Header: &configPb.HeaderValue{
-											Key:   "target-pod",
-											RawValue: []byte(targetPod),
+											Key:   "target_pod",
+											Value: targetPod,
 										},
 									},
 								},
@@ -760,112 +790,60 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 	}
 }
 
-    func main() {
+func main() {
+	podsFlag := flag.String("pods", "", "Comma-separated list of pod addresses")
+	podIPsFlag := flag.String("podIPs", "", "Comma-separated list of pod IPs")
+	flag.Parse()
 
-    	flag.IntVar(&port, "port", 9002, "gRPC port")
-    	flag.StringVar(&certPath, "certPath", "", "path to extProcServer certificate and private key")
+	if *podsFlag == "" || *podIPsFlag == "" {
+		log.Fatal("No pods or pod IPs provided. Use the -pods and -podIPs flags to specify comma-separated lists of pod addresses and pod IPs.")
+	}
 
-		podsFlag := flag.String("pods", "", "Comma-separated list of pod addresses")
-		podIPsFlag := flag.String("podIPs", "", "Comma-separated list of pod IPs")
-		flag.Parse()
+	pods = strings.Split(*podsFlag, ",")
+	podIPs := strings.Split(*podIPsFlag, ",")
 
-		if *podsFlag == "" || *podIPsFlag == "" {
-			log.Fatal("No pods or pod IPs provided. Use the -pods and -podIPs flags to specify comma-separated lists of pod addresses and pod IPs.")
-		}
+	if len(pods) != len(podIPs) {
+		log.Fatal("The number of pod addresses and pod IPs must match.")
+	}
 
-		pods = strings.Split(*podsFlag, ",")
-		podIPs := strings.Split(*podIPsFlag, ",")
+	podIPMap = make(map[string]string)
+	for i := range pods {
+		podIPMap[pods[i]] = podIPs[i]
+	}
 
-		if len(pods) != len(podIPs) {
-			log.Fatal("The number of pod addresses and pod IPs must match.")
-		}
+	// cache init
+	cacheActiveLoraModel = freecache.NewCache(1024)
+	cachePendingRequestActiveAdapters = freecache.NewCache(1024)
+	debug.SetGCPercent(20)
 
-		podIPMap = make(map[string]string)
-		for i := range pods {
-			podIPMap[pods[i]] = podIPs[i]
-		}
-
-		// cache init
-		cacheActiveLoraModel = freecache.NewCache(1024)
-		cachePendingRequestActiveAdapters = freecache.NewCache(1024)
-		debug.SetGCPercent(20)
-
-		// Start the periodic metrics fetching in a separate goroutine
+	// Start the periodic metrics fetching in a separate goroutine
 	
-		go fetchMetricsPeriodically(interval)
+	go fetchMetricsPeriodically(interval)
 
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-    	if err != nil {
-    		log.Fatalf("failed to listen: %v", err)
-    	}
+	// grpc server init
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
 
+	s := grpc.NewServer()
 
-    	creds, err := loadTLSCredentials(certPath)
-    	if err != nil {
-    		log.Fatalf("Failed to load TLS credentials: %v", err)
-    	}
+	extProcPb.RegisterExternalProcessorServer(s, &server{})
+	healthPb.RegisterHealthServer(s, &healthServer{})
 
-    	s := grpc.NewServer(grpc.Creds(creds))
+	log.Println("Starting gRPC server on port :50051")
 
+	// shutdown
+	var gracefulStop = make(chan os.Signal)
+	signal.Notify(gracefulStop, syscall.SIGTERM)
+	signal.Notify(gracefulStop, syscall.SIGINT)
+	go func() {
+		sig := <-gracefulStop
+		log.Printf("caught sig: %+v", sig)
+		log.Println("Wait for 1 second to finish processing")
+		time.Sleep(1 * time.Second)
+		os.Exit(0)
+	}()
 
-    	extProcPb.RegisterExternalProcessorServer(s, &server{})
-		healthPb.RegisterHealthServer(s, &healthServer{})
-
-		log.Println("Starting gRPC server on port :9002")
-
-		
-
-		go func() {
-    		err = s.Serve(lis)
-    		if err != nil {
-    			log.Fatalf("failed to serve: %v", err)
-    		}
-    	}()
-
-		http.HandleFunc("/healthz", healthCheckHandler)
-    	err = http.ListenAndServe(":8080", nil)
-    	if err != nil {
-    		log.Fatalf("failed to serve: %v", err)
-    	}
-
-    }
-
-    func loadTLSCredentials(certPath string) (credentials.TransportCredentials, error) {
-    	// Load extProcServer's certificate and private key
-    	crt := "server.crt"
-    	key := "server.key"
-
-    	if certPath != "" {
-    		if !strings.HasSuffix(certPath, "/") {
-    			certPath = fmt.Sprintf("%s/", certPath)
-    		}
-    		crt = fmt.Sprintf("%s%s", certPath, crt)
-    		key = fmt.Sprintf("%s%s", certPath, key)
-    	}
-    	certificate, err := tls.LoadX509KeyPair(crt, key)
-    	if err != nil {
-    		return nil, fmt.Errorf("could not load extProcServer key pair: %s", err)
-    	}
-
-    	// Create a new credentials object
-    	creds := credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{certificate}})
-
-    	return creds, nil
-    }
-
-    func loadCA(caPath string) (*x509.CertPool, error) {
-    	ca := x509.NewCertPool()
-    	caCertPath := "server.crt"
-    	if caPath != "" {
-    		if !strings.HasSuffix(caPath, "/") {
-    			caPath = fmt.Sprintf("%s/", caPath)
-    		}
-    		caCertPath = fmt.Sprintf("%s%s", caPath, caCertPath)
-    	}
-    	caCert, err := os.ReadFile(caCertPath)
-    	if err != nil {
-    		return nil, fmt.Errorf("could not read ca certificate: %s", err)
-    	}
-    	ca.AppendCertsFromPEM(caCert)
-    	return ca, nil
-    }
+	s.Serve(lis)
+}
