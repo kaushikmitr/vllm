@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc-server-deployment
+  labels:
+    app: grpc-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grpc-server
+  template:
+    metadata:
+      labels:
+        app: grpc-server
+    spec:
+      containers:
+      - name: grpc-server
+        image: us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/grpc-vllm-lora-go:latest
+        args:
+        - -pods
+        - "vllm-0,vllm-1,vllm-2"
+        - -podIPs
+        - "vllm-0.vllm-lora.default.svc.cluster.local:8000,vllm-1.vllm-lora.default.svc.cluster.local:8000,vllm-2.vllm-lora.default.svc.cluster.local:8000"  
+        ports:
+        - containerPort: 50051
+      - name: curl
+        image: curlimages/curl
+        command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-server-service
+spec:
+  selector:
+    app: grpc-server
+  ports:
+    - protocol: TCP
+      port: 50051
+      targetPort: 50051
+  type: LoadBalancer
