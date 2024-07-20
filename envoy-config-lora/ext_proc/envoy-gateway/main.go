@@ -61,7 +61,7 @@ type ActiveLoraModelMetrics struct {
 	Date               string
 	PodName            string
 	ModelName          string
-	ActiveLoraAdapters int
+	NumberOfPendingRequests int
 }
 
 type PendingRequestActiveAdaptersMetrics struct {
@@ -114,8 +114,8 @@ func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg 
 		if name == "vllm:active_lora_adapters" {
 			for _, m := range mf.GetMetric() {
 				modelName := getLabelValue(m, "active_lora_adapters")
-				activeLoraAdapters := int(m.GetGauge().GetValue())
-				modelsDict[modelName] = activeLoraAdapters
+				numberOfPendingRequests := int(m.GetGauge().GetValue())
+				modelsDict[modelName] = numberOfPendingRequests
 			}
 		}
 		if name == "vllm:info_active_adapters_info" {
@@ -131,7 +131,7 @@ func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg 
 		}
 	}
 
-	for modelName, activeLoraAdapters := range modelsDict {
+	for modelName, numberOfPendingRequests := range modelsDict {
 		if !contains(adapterList, modelName){
 			continue
 		}
@@ -139,7 +139,7 @@ func fetchLoraMetricsFromPod(pod string, ch chan<- []ActiveLoraModelMetrics, wg 
 			Date:               time.Now().Format(time.RFC3339),
 			PodName:            pod,
 			ModelName:          modelName,
-			ActiveLoraAdapters: activeLoraAdapters,
+			NumberOfPendingRequests: numberOfPendingRequests,
 		}
 		loraMetrics = append(loraMetrics, loraMetric)
 	}
@@ -315,15 +315,15 @@ func FindTargetPod(loraMetrics []ActiveLoraModelMetrics, requestMetrics []Pendin
 	}
 
 	// Find the pod with the max lora requests among the relevant metrics
-	maxActiveLoraAdapters := -1
+	maxNumberOfPendingRequests := -1
 	var bestPods []ActiveLoraModelMetrics
 	for _, metric := range relevantMetrics {
 			if metric.ModelName == loraAdapterRequested {
-				if metric.ActiveLoraAdapters > maxActiveLoraAdapters {
-					maxActiveLoraAdapters = metric.ActiveLoraAdapters
+				if metric.NumberOfPendingRequests > maxNumberOfPendingRequests {
+					maxNumberOfPendingRequests = metric.NumberOfPendingRequests
 					bestPods = []ActiveLoraModelMetrics{}
 				}
-				if metric.ActiveLoraAdapters == maxActiveLoraAdapters {
+				if metric.NumberOfPendingRequests == maxNumberOfPendingRequests {
 					bestPods = append(bestPods, metric)
 				}
 			}
@@ -332,14 +332,14 @@ func FindTargetPod(loraMetrics []ActiveLoraModelMetrics, requestMetrics []Pendin
 	if len(bestPods) > 0 {
 		rand.Seed(time.Now().UnixNano())
 		targetPod = bestPods[rand.Intn(len(bestPods))].PodName
-		fmt.Printf("Selected pod with the highest ActiveLoraAdapters: %s\n", targetPod)
+		fmt.Printf("Selected pod with the highest NumberOfPendingRequests: %s\n", targetPod)
 	} else {
 
 			fmt.Printf("No pods match the requested model: %s\n")
 		}
 
 	// If the number of active Lora adapters in the selected pod is greater than the threshold, choose the pod with the least requests
-	if maxActiveLoraAdapters > threshold && bestAlternativePod != "" {
+	if maxNumberOfPendingRequests > threshold && bestAlternativePod != "" {
 		targetPod = bestAlternativePod
 		fmt.Printf("Selected pod's active Lora adapters exceed threshold, selecting the best alternative pod: %s with %d pending requests\n", targetPod, minAltRequests)
 	}
@@ -627,7 +627,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 				if loraAdapterRequested != "" {
 					loraMetric, err := getCacheActiveLoraModel(targetPod, loraAdapterRequested)
 					if err == nil {
-						loraMetric.ActiveLoraAdapters++
+						loraMetric.NumberOfPendingRequests++
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
 							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
 						}
@@ -637,7 +637,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 							Date:               time.Now().Format(time.RFC3339),
 							PodName:            targetPod,
 							ModelName:          loraAdapterRequested,
-							ActiveLoraAdapters: 1,
+							NumberOfPendingRequests: 1,
 						}
 						newAdapterRequest = true
 						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
@@ -722,12 +722,12 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			}
 
 			if modelNames != nil {
-				for modelName, activeLoraAdapters := range modelNames {
+				for modelName, numberOfPendingRequests := range modelNames {
 					metric := ActiveLoraModelMetrics{
 						Date:               time.Now().Format(time.RFC3339),
 						PodName:            targetPod,
 						ModelName:          modelName,
-						ActiveLoraAdapters: activeLoraAdapters,
+						NumberOfPendingRequests: numberOfPendingRequests,
 					}
 					podAdapterMap[metric.PodName]++
 					loraMetrics = append(loraMetrics, metric)
