@@ -622,43 +622,6 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 						},
 					},
 				}
-			} else {
-				var newAdapterRequest bool = false
-				if loraAdapterRequested != "" {
-					loraMetric, err := getCacheActiveLoraModel(targetPod, loraAdapterRequested)
-					if err == nil {
-						loraMetric.NumberOfPendingRequests++
-						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
-							log.Printf("Error updating ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
-						}
-					} else if err == freecache.ErrNotFound {
-						// Create new metric if not found in cache
-						loraMetric = &ActiveLoraModelMetrics{
-							Date:               time.Now().Format(time.RFC3339),
-							PodName:            targetPod,
-							ModelName:          loraAdapterRequested,
-							NumberOfPendingRequests: 1,
-						}
-						newAdapterRequest = true
-						if err := setCacheActiveLoraModel(*loraMetric); err != nil {
-							log.Printf("Error creating new ActiveLoraModelMetrics cache for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
-						}
-					} else {
-						log.Printf("Error fetching cacheActiveLoraModel for pod %s and model %s: %v", targetPod, loraAdapterRequested, err)
-					}
-				}
-				requestMetric, err := getCachePendingRequestActiveAdapters(targetPod)
-				if err == nil {
-					requestMetric.PendingRequests++
-					if newAdapterRequest != false {
-						requestMetric.NumberOfActiveAdapters++
-					}
-					if err := setCachePendingRequestActiveAdapters(*requestMetric); err != nil {
-						log.Printf("Error updating PendingRequestActiveAdapters cache for pod %s: %v", targetPod, err)
-					}
-				} else if err != freecache.ErrNotFound {
-					log.Printf("Error fetching cachePendingRequestActiveAdapters for pod %s: %v", targetPod, err)
-				}
 			}
 
 			resp = &extProcPb.ProcessingResponse{
@@ -704,6 +667,7 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			var requestMetrics []PendingRequestActiveAdaptersMetrics
 			var modelNames map[string]int
 			var pendingQueueSize int
+			pendingQueueSize = -1
 			podAdapterMap := make(map[string]int)
 			for _, header := range h.ResponseHeaders.Headers.Headers {
 				switch header.Key {
@@ -732,26 +696,31 @@ func (s *server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 					podAdapterMap[metric.PodName]++
 					loraMetrics = append(loraMetrics, metric)
 				}
+				// Update cache with parsed values
+				for _, metric := range loraMetrics {
+					if err := setCacheActiveLoraModel(metric); err != nil {
+						log.Printf("Error setting cache in Response Header: %v", err)
+					}
+				}
 			}
-			requestMetric := PendingRequestActiveAdaptersMetrics{
-				Date:                  time.Now().Format(time.RFC3339),
-				PodName:               targetPod,
-				PendingRequests:       pendingQueueSize,
-				NumberOfActiveAdapters: podAdapterMap[targetPod],
+			if pendingQueueSize >= 0{
+				requestMetric := PendingRequestActiveAdaptersMetrics{
+					Date:                  time.Now().Format(time.RFC3339),
+					PodName:               targetPod,
+					PendingRequests:       pendingQueueSize,
+					NumberOfActiveAdapters: podAdapterMap[targetPod],
+					}
+				requestMetrics = append(requestMetrics, requestMetric)
+				for _, metric := range requestMetrics {
+					if err := setCachePendingRequestActiveAdapters(metric); err != nil {
+						log.Printf("Error setting cache in Response Header: %v", err)
+					}
+				}
 			}
-			requestMetrics = append(requestMetrics, requestMetric)
+			
 
-			// Update cache with parsed values
-			for _, metric := range loraMetrics {
-				if err := setCacheActiveLoraModel(metric); err != nil {
-					log.Printf("Error setting cache in Response Header: %v", err)
-				}
-			}
-			for _, metric := range requestMetrics {
-				if err := setCachePendingRequestActiveAdapters(metric); err != nil {
-					log.Printf("Error setting cache in Response Header: %v", err)
-				}
-			}
+			
+			
 
 			resp = &extProcPb.ProcessingResponse{
 				Response: &extProcPb.ProcessingResponse_ResponseHeaders{
