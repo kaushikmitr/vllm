@@ -8,42 +8,9 @@ spec:
   parentRefs:
   - name: example-gateway
   rules:
-  - matches:
-    - headers:
-      - name: target-pod
-        value: vllm-0
-    backendRefs:
-    - name: vllm-0
-      port: 8000
-      kind: Service
-    timeouts:
-      request: "1000s"
-      backendRequest: "1000s"
-  - matches:
-    - headers:
-      - name: target-pod
-        value: vllm-1
-    backendRefs:
-    - name: vllm-1
-      port: 8000
-      kind: Service
-    timeouts:
-      request: "1000s"
-      backendRequest: "1000s"
-  - matches:
-    - headers:
-      - name: target-pod
-        value: vllm-2
-    backendRefs:
-    - name: vllm-2
-      port: 8000
-      kind: Service
-    timeouts:
-      request: "1000s"
-      backendRequest: "1000s"
   - backendRefs:
-    - name: vllm-0
-      port: 8000
+    - name: grpc-envoy-lora
+      port: 80
       kind: Service
     timeouts:
       request: "1000s"

@@ -1,0 +1,231 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-0
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-0
+  template:
+    metadata:
+      labels:
+        app: vllm-0
+    spec:
+      containers:
+        - name: lora
+          image: "us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/vllm-lora"
+          imagePullPolicy: Always
+          env:
+            - name: PORT
+              value: "8000"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 240
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 600
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: "8"
+              ephemeral-storage: 100Gi
+              memory: 27041Mi
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "8"
+              ephemeral-storage: 100Gi
+              memory: 27041Mi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - mountPath: /data
+              name: data
+            - mountPath: /dev/shm
+              name: shm
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-1
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-1
+  template:
+    metadata:
+      labels:
+        app: vllm-1
+    spec:
+      containers:
+        - name: lora
+          image: "us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/vllm-lora"
+          imagePullPolicy: Always
+          env:
+            - name: PORT
+              value: "8000"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 240
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 600
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: "8"
+              ephemeral-storage: 100Gi
+              memory: 27041Mi
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "8"
+              ephemeral-storage: 100Gi
+              memory: 27041Mi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - mountPath: /data
+              name: data
+            - mountPath: /dev/shm
+              name: shm
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-2
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-2
+  template:
+    metadata:
+      labels:
+        app: vllm-2
+    spec:
+      containers:
+        - name: lora
+          image: "us-docker.pkg.dev/kaushikmitra-gke-dev/kaushikmitra-docker-repo/vllm-lora"
+          imagePullPolicy: Always
+          env:
+            - name: PORT
+              value: "8000"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 240
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 600
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: "8"
+              ephemeral-storage: 100Gi
+              memory: 27041Mi
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "8"
+              ephemeral-storage: 100Gi
+              memory: 27041Mi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - mountPath: /data
+              name: data
+            - mountPath: /dev/shm
+              name: shm
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
