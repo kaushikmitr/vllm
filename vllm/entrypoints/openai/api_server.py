@@ -171,6 +171,8 @@ async def create_chat_completion(request: ChatCompletionRequest,
             custom_headers["pending_queue_size"] = str(generator.usage.pending_queue_size)
             orca_pending_queue_size = int_to_orca(generator.usage.pending_queue_size)
             custom_headers["orca_pending_queue_size"] = base64.b64encode(orca_pending_queue_size).decode('utf-8')
+        custom_headers["total_tokens"] = str(generator.usage.total_tokens)
+        custom_headers["model"] = request.model
             
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(),
