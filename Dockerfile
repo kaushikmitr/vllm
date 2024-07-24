@@ -62,18 +62,6 @@ COPY requirements-common.txt requirements-common.txt
 COPY requirements-cuda.txt requirements-cuda.txt
 COPY pyproject.toml pyproject.toml
 COPY vllm vllm
-COPY lora-tweet lora-tweet
-COPY lora-sql lora-sql
-COPY lora-tweet lora-tweet-0
-COPY lora-sql lora-sql-0
-COPY lora-tweet lora-tweet-1
-COPY lora-sql lora-sql-1
-COPY lora-tweet lora-tweet-2
-COPY lora-sql lora-sql-2
-COPY lora-tweet lora-tweet-3
-COPY lora-sql lora-sql-3
-COPY lora-tweet lora-tweet-4
-COPY lora-sql lora-sql-4
 
 # max jobs used by Ninja to build extensions
 ARG max_jobs=2
@@ -117,24 +105,6 @@ RUN python3 check-wheel-size.py dist
 # image with vLLM installed
 FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS vllm-base
 WORKDIR /vllm-workspace
-
-COPY --from=build /workspace/lora-sql /lora-sql
-COPY --from=build /workspace/lora-tweet /lora-tweet
-
-COPY --from=build /workspace/lora-sql-0 /lora-sql-0
-COPY --from=build /workspace/lora-tweet-0 /lora-tweet-0
-
-COPY --from=build /workspace/lora-sql-1 /lora-sql-1
-COPY --from=build /workspace/lora-tweet-1 /lora-tweet-1
-
-COPY --from=build /workspace/lora-sql-2 /lora-sql-2
-COPY --from=build /workspace/lora-tweet-2 /lora-tweet-2
-
-COPY --from=build /workspace/lora-sql-3 /lora-sql-3
-COPY --from=build /workspace/lora-tweet-3 /lora-tweet-3
-
-COPY --from=build /workspace/lora-sql-4 /lora-sql-4
-COPY --from=build /workspace/lora-tweet-4 /lora-tweet-4
 
 RUN apt-get update -y \
     && apt-get install -y python3-pip git vim
