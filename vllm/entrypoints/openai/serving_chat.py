@@ -308,7 +308,7 @@ class OpenAIServingChat(OpenAIServing):
             result_generator: AsyncIterator[RequestOutput], request_id: str,
             conversation: List[ConversationMessage]
     ) -> AsyncGenerator[str, None]:
-        model_name = self.served_model_names[0]
+        model_name = request.model
         created_time = int(time.time())
         chunk_object_type = "chat.completion.chunk"
         first_iteration = True
@@ -486,7 +486,7 @@ class OpenAIServingChat(OpenAIServing):
         conversation: List[ConversationMessage]
     ) -> Union[ErrorResponse, ChatCompletionResponse]:
 
-        model_name = self.served_model_names[0]
+        model_name = request.model
         created_time = int(time.time())
         final_res: Optional[RequestOutput] = None
         
