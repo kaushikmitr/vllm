@@ -80,4 +80,25 @@ class LoRARequest:
             DeprecationWarning,
             stacklevel=2)
         self.lora_path = value
+<<<<<<< HEAD
 >>>>>>> 42c7f66a ([Core] Support dynamically loading Lora adapter from HuggingFace (#6234))
+=======
+
+    def __eq__(self, value: object) -> bool:
+        """
+        Overrides the equality method to compare LoRARequest
+        instances based on lora_name. This allows for identification
+        and comparison lora adapter across engines.
+        """
+        return isinstance(value,
+                          self.__class__) and self.lora_name == value.lora_name
+
+    def __hash__(self) -> int:
+        """
+        Overrides the hash method to hash LoRARequest instances
+        based on lora_name. This ensures that LoRARequest instances
+        can be used in hash-based collections such as sets and dictionaries,
+        identified by their names across engines.
+        """
+        return hash(self.lora_name)
+>>>>>>> db3bf7c9 ([Core] Support load and unload LoRA in api server (#6566))

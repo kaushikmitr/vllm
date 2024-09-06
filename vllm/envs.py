@@ -42,6 +42,31 @@ if TYPE_CHECKING:
     VLLM_INSTALL_PUNICA_KERNELS: bool = False
     CMAKE_BUILD_TYPE: Optional[str] = None
     VERBOSE: bool = False
+<<<<<<< HEAD
+=======
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN: bool = False
+    VLLM_TEST_FORCE_FP8_MARLIN: bool = False
+    VLLM_RPC_GET_DATA_TIMEOUT_MS: int = 5000
+    VLLM_ALLOW_ENGINE_USE_RAY: bool = False
+    VLLM_PLUGINS: Optional[List[str]] = None
+    VLLM_TORCH_PROFILER_DIR: Optional[str] = None
+    VLLM_ALLOW_RUNTIME_LORA_UPDATING: bool = False
+
+
+def get_default_cache_root():
+    return os.getenv(
+        "XDG_CACHE_HOME",
+        os.path.join(os.path.expanduser("~"), ".cache"),
+    )
+
+
+def get_default_config_root():
+    return os.getenv(
+        "XDG_CONFIG_HOME",
+        os.path.join(os.path.expanduser("~"), ".config"),
+    )
+
+>>>>>>> db3bf7c9 ([Core] Support load and unload LoRA in api server (#6566))
 
 # The begin-* and end* here are used by the documentation generator
 # to extract the used env vars.
@@ -247,7 +272,78 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # Path to the XLA persistent cache directory.
     # Only used for XLA devices such as TPUs.
     "VLLM_XLA_CACHE_PATH":
+<<<<<<< HEAD
     lambda: os.getenv("VLLM_XLA_CACHE_PATH", "~/.vllm/xla_cache/"),
+=======
+    lambda: os.path.expanduser(
+        os.getenv(
+            "VLLM_XLA_CACHE_PATH",
+            os.path.join(get_default_cache_root(), "vllm", "xla_cache"),
+        )),
+    "VLLM_FUSED_MOE_CHUNK_SIZE":
+    lambda: int(os.getenv("VLLM_FUSED_MOE_CHUNK_SIZE", "32768")),
+
+    # If set, vllm will skip the deprecation warnings.
+    "VLLM_NO_DEPRECATION_WARNING":
+    lambda: bool(int(os.getenv("VLLM_NO_DEPRECATION_WARNING", "0"))),
+
+    # If set, the OpenAI API server will stay alive even after the underlying
+    # AsyncLLMEngine errors and stops serving requests
+    "VLLM_KEEP_ALIVE_ON_ENGINE_DEATH":
+    lambda: bool(os.getenv("VLLM_KEEP_ALIVE_ON_ENGINE_DEATH", 0)),
+
+    # If the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN is set, it allows
+    # the user to specify a max sequence length greater than
+    # the max length derived from the model's config.json.
+    # To enable this, set VLLM_ALLOW_LONG_MAX_MODEL_LEN=1.
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN":
+    lambda:
+    (os.environ.get("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "0").strip().lower() in
+     ("1", "true")),
+
+    # If set, forces FP8 Marlin to be used for FP8 quantization regardless
+    # of the hardware support for FP8 compute.
+    "VLLM_TEST_FORCE_FP8_MARLIN":
+    lambda:
+    (os.environ.get("VLLM_TEST_FORCE_FP8_MARLIN", "0").strip().lower() in
+     ("1", "true")),
+
+    # Time in ms for the zmq client to wait for a response from the backend
+    # server for simple data operations
+    "VLLM_RPC_GET_DATA_TIMEOUT_MS":
+    lambda: int(os.getenv("VLLM_RPC_GET_DATA_TIMEOUT_MS", "5000")),
+
+    # If set, allow running the engine as a separate ray actor,
+    # which is a deprecated feature soon to be removed.
+    # See https://github.com/vllm-project/vllm/issues/7045
+    "VLLM_ALLOW_ENGINE_USE_RAY":
+    lambda:
+    (os.environ.get("VLLM_ALLOW_ENGINE_USE_RAY", "0").strip().lower() in
+     ("1", "true")),
+
+    # a list of plugin names to load, separated by commas.
+    # if this is not set, it means all plugins will be loaded
+    # if this is set to an empty string, no plugins will be loaded
+    "VLLM_PLUGINS":
+    lambda: None if "VLLM_PLUGINS" not in os.environ else os.environ[
+        "VLLM_PLUGINS"].split(","),
+
+    # Enables torch profiler if set. Path to the directory where torch profiler
+    # traces are saved. Note that it must be an absolute path.
+    "VLLM_TORCH_PROFILER_DIR":
+    lambda: (None if os.getenv("VLLM_TORCH_PROFILER_DIR", None) is None else os
+             .path.expanduser(os.getenv("VLLM_TORCH_PROFILER_DIR", "."))),
+
+    # If set, vLLM will use Triton implementations of AWQ.
+    "VLLM_USE_TRITON_AWQ":
+    lambda: bool(int(os.getenv("VLLM_USE_TRITON_AWQ", "0"))),
+
+    # If set, allow loading or unloading lora adapters in runtime,
+    "VLLM_ALLOW_RUNTIME_LORA_UPDATING":
+    lambda:
+    (os.environ.get("VLLM_ALLOW_RUNTIME_LORA_UPDATING", "0").strip().lower() in
+     ("1", "true")),
+>>>>>>> db3bf7c9 ([Core] Support load and unload LoRA in api server (#6566))
 }
 
 # end-env-vars-definition

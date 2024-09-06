@@ -10,4 +10,9 @@ pydantic
 torch
 py-cpuinfo
 transformers
+<<<<<<< HEAD
 openai # Required by docs/source/serving/openai_compatible_server.md's vllm.entrypoints.openai.cli_args
+=======
+mistral_common >= 1.3.4
+openai # Required by docs/source/serving/openai_compatible_server.md's vllm.entrypoints.openai.cli_args
+>>>>>>> db3bf7c9 ([Core] Support load and unload LoRA in api server (#6566))
