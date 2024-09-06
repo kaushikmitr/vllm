@@ -29,9 +29,14 @@ from vllm.entrypoints.openai.protocol import (ChatCompletionRequest,
                                               CompletionRequest,
                                               DetokenizeRequest,
                                               DetokenizeResponse,
-                                              EmbeddingRequest, ErrorResponse,
+                                              EmbeddingRequest,
+                                              EmbeddingResponse, ErrorResponse,
+                                              LoadLoraAdapterRequest,
                                               TokenizeRequest,
-                                              TokenizeResponse)
+                                              TokenizeResponse,
+                                              UnloadLoraAdapterRequest)
+from vllm.entrypoints.openai.rpc.client import AsyncEngineRPCClient
+from vllm.entrypoints.openai.rpc.server import run_rpc_server
 # yapf: enable
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
 from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
@@ -228,9 +233,69 @@ async def create_embedding(request: EmbeddingRequest, raw_request: Request):
     else:
         return JSONResponse(content=generator.model_dump())
 
+    assert_never(generator)
 
-if __name__ == "__main__":
-    args = parse_args()
+
+if envs.VLLM_TORCH_PROFILER_DIR:
+    logger.warning(
+        "Torch Profiler is enabled in the API server. This should ONLY be "
+        "used for local development!")
+
+    @router.post("/start_profile")
+    async def start_profile():
+        logger.info("Starting profiler...")
+        await async_engine_client.start_profile()
+        logger.info("Profiler started.")
+        return Response(status_code=200)
+
+    @router.post("/stop_profile")
+    async def stop_profile():
+        logger.info("Stopping profiler...")
+        await async_engine_client.stop_profile()
+        logger.info("Profiler stopped.")
+        return Response(status_code=200)
+
+
+if envs.VLLM_ALLOW_RUNTIME_LORA_UPDATING:
+    logger.warning(
+        "Lora dynamic loading & unloading is enabled in the API server. "
+        "This should ONLY be used for local development!")
+
+    @router.post("/v1/load_lora_adapter")
+    async def load_lora_adapter(request: LoadLoraAdapterRequest):
+        response = await openai_serving_chat.load_lora_adapter(request)
+        if isinstance(response, ErrorResponse):
+            return JSONResponse(content=response.model_dump(),
+                                status_code=response.code)
+
+        response = await openai_serving_completion.load_lora_adapter(request)
+        if isinstance(response, ErrorResponse):
+            return JSONResponse(content=response.model_dump(),
+                                status_code=response.code)
+
+        return Response(status_code=200, content=response)
+
+    @router.post("/v1/unload_lora_adapter")
+    async def unload_lora_adapter(request: UnloadLoraAdapterRequest):
+        response = await openai_serving_chat.unload_lora_adapter(request)
+        if isinstance(response, ErrorResponse):
+            return JSONResponse(content=response.model_dump(),
+                                status_code=response.code)
+
+        response = await openai_serving_completion.unload_lora_adapter(request)
+        if isinstance(response, ErrorResponse):
+            return JSONResponse(content=response.model_dump(),
+                                status_code=response.code)
+
+        return Response(status_code=200, content=response)
+
+
+def build_app(args: Namespace) -> FastAPI:
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(router)
+    app.root_path = args.root_path
+
+    mount_metrics(app)
 
     app.add_middleware(
         CORSMiddleware,
