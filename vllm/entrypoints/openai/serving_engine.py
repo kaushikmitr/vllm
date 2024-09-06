@@ -337,6 +337,3 @@ class OpenAIServing:
             if lora_request.lora_name != lora_name
         ]
         return f"Success: LoRA adapter '{lora_name}' removed successfully."
-
-    def _is_model_supported(self, model_name):
-        return any(model.name == model_name for model in self.base_model_paths)
