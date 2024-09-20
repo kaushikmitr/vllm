@@ -12,7 +12,8 @@ from vllm.entrypoints.openai.protocol import (BatchRequestInput,
                                               ChatCompletionResponse,
                                               ErrorResponse)
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
-from vllm.logger import init_logger
+from vllm.entrypoints.openai.serving_embedding import OpenAIServingEmbedding
+from vllm.entrypoints.openai.serving_engine import BaseModelPath
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, random_uuid
 from vllm.version import __version__ as VLLM_VERSION
@@ -113,13 +114,36 @@ async def main(args):
 
     # When using single vLLM without engine_use_ray
     model_config = await engine.get_model_config()
+    base_model_paths = [
+        BaseModelPath(name=name, model_path=args.model)
+        for name in served_model_names
+    ]
 
+    if args.disable_log_requests:
+        request_logger = None
+    else:
+        request_logger = RequestLogger(max_log_len=args.max_log_len)
+
+    # Create the openai serving objects.
     openai_serving_chat = OpenAIServingChat(
         engine,
         model_config,
-        served_model_names,
+        base_model_paths,
         args.response_role,
+        lora_modules=None,
+        prompt_adapters=None,
+        request_logger=request_logger,
+        chat_template=None,
     )
+    openai_serving_embedding = OpenAIServingEmbedding(
+        engine,
+        model_config,
+        base_model_paths,
+        request_logger=request_logger,
+    )
+
+    tracker = BatchProgressTracker()
+    logger.info("Reading batch from %s...", args.input_file)
 
     # Submit all requests in the file to the engine "concurrently".
     response_futures: List[Awaitable[BatchRequestOutput]] = []

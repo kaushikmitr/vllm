@@ -7,9 +7,9 @@ from vllm.config import ModelConfig
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 from vllm.entrypoints.openai.protocol import (EmbeddingRequest,
                                               EmbeddingResponse,
-                                              EmbeddingResponseData, UsageInfo)
-from vllm.entrypoints.openai.serving_completion import parse_prompt_format
-from vllm.entrypoints.openai.serving_engine import OpenAIServing
+                                              EmbeddingResponseData,
+                                              ErrorResponse, UsageInfo)
+from vllm.entrypoints.openai.serving_engine import BaseModelPath, OpenAIServing
 from vllm.logger import init_logger
 from vllm.outputs import EmbeddingRequestOutput
 from vllm.utils import merge_async_iterators, random_uuid
@@ -53,13 +53,21 @@ def request_output_to_embedding_response(
 
 class OpenAIServingEmbedding(OpenAIServing):
 
-    def __init__(self, engine: AsyncLLMEngine, model_config: ModelConfig,
-                 served_model_names: List[str]):
-        super().__init__(engine=engine,
+    def __init__(
+        self,
+        engine_client: EngineClient,
+        model_config: ModelConfig,
+        base_model_paths: List[BaseModelPath],
+        *,
+        request_logger: Optional[RequestLogger],
+    ):
+        super().__init__(engine_client=engine_client,
                          model_config=model_config,
-                         served_model_names=served_model_names,
-                         lora_modules=None)
-        self._check_embedding_mode(model_config.embedding_mode)
+                         base_model_paths=base_model_paths,
+                         lora_modules=None,
+                         prompt_adapters=None,
+                         request_logger=request_logger)
+        self._enabled = self._check_embedding_mode(model_config.embedding_mode)
 
     async def create_embedding(self, request: EmbeddingRequest,
                                raw_request: Request):

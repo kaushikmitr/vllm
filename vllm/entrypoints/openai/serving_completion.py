@@ -21,8 +21,10 @@ from vllm.entrypoints.openai.protocol import (CompletionLogProbs,
                                               TokenizeRequest,
                                               TokenizeResponse, UsageInfo)
 # yapf: enable
-from vllm.entrypoints.openai.serving_engine import (LoRAModulePath,
-                                                    OpenAIServing)
+from vllm.entrypoints.openai.serving_engine import (BaseModelPath,
+                                                    LoRAModulePath,
+                                                    OpenAIServing,
+                                                    PromptAdapterPath)
 from vllm.logger import init_logger
 from vllm.model_executor.guided_decoding import (
     get_guided_decoding_logits_processor)
@@ -65,13 +67,24 @@ def parse_prompt_format(prompt) -> Tuple[bool, list]:
 
 class OpenAIServingCompletion(OpenAIServing):
 
-    def __init__(self, engine: AsyncLLMEngine, model_config: ModelConfig,
-                 served_model_names: List[str],
-                 lora_modules: Optional[List[LoRAModulePath]]):
-        super().__init__(engine=engine,
+    def __init__(
+        self,
+        engine_client: EngineClient,
+        model_config: ModelConfig,
+        base_model_paths: List[BaseModelPath],
+        *,
+        lora_modules: Optional[List[LoRAModulePath]],
+        prompt_adapters: Optional[List[PromptAdapterPath]],
+        request_logger: Optional[RequestLogger],
+        return_tokens_as_token_ids: bool = False,
+    ):
+        super().__init__(engine_client=engine_client,
                          model_config=model_config,
-                         served_model_names=served_model_names,
-                         lora_modules=lora_modules)
+                         base_model_paths=base_model_paths,
+                         lora_modules=lora_modules,
+                         prompt_adapters=prompt_adapters,
+                         request_logger=request_logger,
+                         return_tokens_as_token_ids=return_tokens_as_token_ids)
 
     async def create_completion(self, request: CompletionRequest,
                                 raw_request: Request):
@@ -93,8 +106,7 @@ class OpenAIServingCompletion(OpenAIServing):
             return self.create_error_response(
                 "suffix is not currently supported")
 
-        model_name = request.model
-
+        model_name = self.base_model_paths[0].name
         request_id = f"cmpl-{random_uuid()}"
         created_time = int(time.time())
 
