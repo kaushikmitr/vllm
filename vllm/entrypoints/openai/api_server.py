@@ -47,6 +47,12 @@ from vllm.entrypoints.openai.rpc.server import run_rpc_server
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
 from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
 from vllm.entrypoints.openai.serving_embedding import OpenAIServingEmbedding
+<<<<<<< HEAD
+=======
+from vllm.entrypoints.openai.serving_engine import BaseModelPath
+from vllm.entrypoints.openai.serving_tokenization import (
+    OpenAIServingTokenization)
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
 from vllm.logger import init_logger
 from vllm.usage.usage_lib import UsageContext
 from vllm.version import __version__ as VLLM_VERSION
@@ -376,6 +382,7 @@ def build_app(args: Namespace) -> FastAPI:
         # When using single vLLM without engine_use_ray
         model_config = asyncio.run(engine.get_model_config())
 
+<<<<<<< HEAD
     openai_serving_chat = OpenAIServingChat(engine, model_config,
                                             served_model_names,
                                             args.response_role,
@@ -395,3 +402,97 @@ def build_app(args: Namespace) -> FastAPI:
                 ssl_certfile=args.ssl_certfile,
                 ssl_ca_certs=args.ssl_ca_certs,
                 ssl_cert_reqs=args.ssl_cert_reqs)
+=======
+    base_model_paths = [
+        BaseModelPath(name=name, model_path=args.model)
+        for name in served_model_names
+    ]
+
+    state.engine_client = engine_client
+    state.log_stats = not args.disable_log_stats
+
+    state.openai_serving_chat = OpenAIServingChat(
+        engine_client,
+        model_config,
+        base_model_paths,
+        args.response_role,
+        lora_modules=args.lora_modules,
+        prompt_adapters=args.prompt_adapters,
+        request_logger=request_logger,
+        chat_template=args.chat_template,
+        return_tokens_as_token_ids=args.return_tokens_as_token_ids,
+        enable_auto_tools=args.enable_auto_tool_choice,
+        tool_parser=args.tool_call_parser)
+    state.openai_serving_completion = OpenAIServingCompletion(
+        engine_client,
+        model_config,
+        base_model_paths,
+        lora_modules=args.lora_modules,
+        prompt_adapters=args.prompt_adapters,
+        request_logger=request_logger,
+        return_tokens_as_token_ids=args.return_tokens_as_token_ids,
+    )
+    state.openai_serving_embedding = OpenAIServingEmbedding(
+        engine_client,
+        model_config,
+        base_model_paths,
+        request_logger=request_logger,
+    )
+    state.openai_serving_tokenization = OpenAIServingTokenization(
+        engine_client,
+        model_config,
+        base_model_paths,
+        lora_modules=args.lora_modules,
+        request_logger=request_logger,
+        chat_template=args.chat_template,
+    )
+
+
+async def run_server(args, **uvicorn_kwargs) -> None:
+    logger.info("vLLM API server version %s", VLLM_VERSION)
+    logger.info("args: %s", args)
+
+    temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    temp_socket.bind(("", args.port))
+
+    def signal_handler(*_) -> None:
+        # Interrupt server on sigterm while initializing
+        raise KeyboardInterrupt("terminated")
+
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    async with build_async_engine_client(args) as engine_client:
+        app = build_app(args)
+
+        model_config = await engine_client.get_model_config()
+        init_app_state(engine_client, model_config, app.state, args)
+
+        temp_socket.close()
+
+        shutdown_task = await serve_http(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level=args.uvicorn_log_level,
+            timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
+            ssl_keyfile=args.ssl_keyfile,
+            ssl_certfile=args.ssl_certfile,
+            ssl_ca_certs=args.ssl_ca_certs,
+            ssl_cert_reqs=args.ssl_cert_reqs,
+            **uvicorn_kwargs,
+        )
+
+    # NB: Await server shutdown only after the backend context is exited
+    await shutdown_task
+
+
+if __name__ == "__main__":
+    # NOTE(simon):
+    # This section should be in sync with vllm/scripts.py for CLI entrypoints.
+    parser = FlexibleArgumentParser(
+        description="vLLM OpenAI-Compatible RESTful API server.")
+    parser = make_arg_parser(parser)
+    args = parser.parse_args()
+
+    uvloop.run(run_server(args))
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))

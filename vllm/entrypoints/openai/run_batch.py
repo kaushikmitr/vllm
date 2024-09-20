@@ -12,7 +12,12 @@ from vllm.entrypoints.openai.protocol import (BatchRequestInput,
                                               ChatCompletionResponse,
                                               ErrorResponse)
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
+<<<<<<< HEAD
 from vllm.logger import init_logger
+=======
+from vllm.entrypoints.openai.serving_embedding import OpenAIServingEmbedding
+from vllm.entrypoints.openai.serving_engine import BaseModelPath
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, random_uuid
 from vllm.version import __version__ as VLLM_VERSION
@@ -113,13 +118,29 @@ async def main(args):
 
     # When using single vLLM without engine_use_ray
     model_config = await engine.get_model_config()
+    base_model_paths = [
+        BaseModelPath(name=name, model_path=args.model)
+        for name in served_model_names
+    ]
 
     openai_serving_chat = OpenAIServingChat(
         engine,
         model_config,
-        served_model_names,
+        base_model_paths,
         args.response_role,
     )
+<<<<<<< HEAD
+=======
+    openai_serving_embedding = OpenAIServingEmbedding(
+        engine,
+        model_config,
+        base_model_paths,
+        request_logger=request_logger,
+    )
+
+    tracker = BatchProgressTracker()
+    logger.info("Reading batch from %s...", args.input_file)
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
 
     # Submit all requests in the file to the engine "concurrently".
     response_futures: List[Awaitable[BatchRequestOutput]] = []

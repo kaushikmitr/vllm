@@ -4,9 +4,15 @@ from dataclasses import dataclass
 import pytest
 
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
+<<<<<<< HEAD
+=======
+from vllm.entrypoints.openai.serving_engine import BaseModelPath
+from vllm.transformers_utils.tokenizer import get_tokenizer
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
 
 MODEL_NAME = "openai-community/gpt2"
 CHAT_TEMPLATE = "Dummy chat template for testing {}"
+BASE_MODEL_PATHS = [BaseModelPath(name=MODEL_NAME, model_path=MODEL_NAME)]
 
 pytestmark = pytest.mark.openai
 
@@ -34,7 +40,7 @@ async def _async_serving_chat_init():
 
     serving_completion = OpenAIServingChat(engine,
                                            model_config,
-                                           served_model_names=[MODEL_NAME],
+                                           BASE_MODEL_PATHS,
                                            response_role="assistant",
                                            chat_template=CHAT_TEMPLATE)
     return serving_completion
@@ -42,5 +48,43 @@ async def _async_serving_chat_init():
 
 def test_async_serving_chat_init():
     serving_completion = asyncio.run(_async_serving_chat_init())
+<<<<<<< HEAD
     assert serving_completion.tokenizer is not None
     assert serving_completion.tokenizer.chat_template == CHAT_TEMPLATE
+=======
+    assert serving_completion.chat_template == CHAT_TEMPLATE
+
+
+def test_serving_chat_should_set_correct_max_tokens():
+    mock_engine = MagicMock(spec=MQLLMEngineClient)
+    mock_engine.get_tokenizer.return_value = get_tokenizer(MODEL_NAME)
+    mock_engine.errored = False
+
+    serving_chat = OpenAIServingChat(mock_engine,
+                                     MockModelConfig(),
+                                     BASE_MODEL_PATHS,
+                                     response_role="assistant",
+                                     chat_template=CHAT_TEMPLATE,
+                                     lora_modules=None,
+                                     prompt_adapters=None,
+                                     request_logger=None)
+    req = ChatCompletionRequest(
+        model=MODEL_NAME,
+        messages=[{
+            "role": "user",
+            "content": "what is 1+1?"
+        }],
+        guided_decoding_backend="outlines",
+    )
+
+    with suppress(Exception):
+        asyncio.run(serving_chat.create_chat_completion(req))
+
+    assert mock_engine.generate.call_args.args[1].max_tokens == 93
+
+    req.max_tokens = 10
+    with suppress(Exception):
+        asyncio.run(serving_chat.create_chat_completion(req))
+
+    assert mock_engine.generate.call_args.args[1].max_tokens == 10
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))

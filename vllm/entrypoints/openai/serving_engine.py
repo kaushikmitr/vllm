@@ -39,21 +39,52 @@ logger = init_logger(__name__)
 
 
 @dataclass
+<<<<<<< HEAD
+=======
+class BaseModelPath:
+    name: str
+    model_path: str
+
+
+@dataclass
+class PromptAdapterPath:
+    name: str
+    local_path: str
+
+
+@dataclass
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
 class LoRAModulePath:
     name: str
     path: str
+    base_model_name: Optional[str] = None
 
 
 class OpenAIServing:
 
+<<<<<<< HEAD
     def __init__(self, engine: AsyncLLMEngine, model_config: ModelConfig,
                  served_model_names: List[str],
                  lora_modules: Optional[List[LoRAModulePath]]):
+=======
+    def __init__(
+        self,
+        engine_client: EngineClient,
+        model_config: ModelConfig,
+        base_model_paths: List[BaseModelPath],
+        *,
+        lora_modules: Optional[List[LoRAModulePath]],
+        prompt_adapters: Optional[List[PromptAdapterPath]],
+        request_logger: Optional[RequestLogger],
+        return_tokens_as_token_ids: bool = False,
+    ):
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
         super().__init__()
 
         self.engine = engine
         self.max_model_len = model_config.max_model_len
 
+<<<<<<< HEAD
         # A separate tokenizer to map token IDs to strings.
         self.tokenizer = get_tokenizer(
             model_config.tokenizer,
@@ -63,6 +94,9 @@ class OpenAIServing:
             truncation_side="left")
 
         self.served_model_names = served_model_names
+=======
+        self.base_model_paths = base_model_paths
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
 
 <<<<<<< HEAD
         if lora_modules is None:
@@ -74,28 +108,42 @@ class OpenAIServing:
         if lora_modules is not None:
 >>>>>>> db3bf7c9 ([Core] Support load and unload LoRA in api server (#6566))
             self.lora_requests = [
-                LoRARequest(
-                    lora_name=lora.name,
-                    lora_int_id=i,
-                    lora_path=lora.path,
-                ) for i, lora in enumerate(lora_modules, start=1)
+                LoRARequest(lora_name=lora.name,
+                            lora_int_id=i,
+                            lora_path=lora.path,
+                            base_model_name=lora.base_model_name
+                            if lora.base_model_name
+                            and self._is_model_supported(lora.base_model_name)
+                            else self.base_model_paths[0].name)
+                for i, lora in enumerate(lora_modules, start=1)
             ]
 
     async def show_available_models(self) -> ModelList:
         """Show available models. Right now we only have one model."""
         model_cards = [
-            ModelCard(id=served_model_name,
+            ModelCard(id=base_model.name,
                       max_model_len=self.max_model_len,
-                      root=self.served_model_names[0],
+                      root=base_model.model_path,
                       permission=[ModelPermission()])
-            for served_model_name in self.served_model_names
+            for base_model in self.base_model_paths
         ]
         lora_cards = [
             ModelCard(id=lora.lora_name,
-                      root=self.served_model_names[0],
+                      root=lora.local_path,
+                      parent=lora.base_model_name if lora.base_model_name else
+                      self.base_model_paths[0].name,
                       permission=[ModelPermission()])
             for lora in self.lora_requests
         ]
+<<<<<<< HEAD
+=======
+        prompt_adapter_cards = [
+            ModelCard(id=prompt_adapter.prompt_adapter_name,
+                      root=self.base_model_paths[0].name,
+                      permission=[ModelPermission()])
+            for prompt_adapter in self.prompt_adapter_requests
+        ]
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
         model_cards.extend(lora_cards)
         return ModelList(data=model_cards)
 
@@ -126,7 +174,7 @@ class OpenAIServing:
                              DetokenizeRequest, EmbeddingRequest,
                              TokenizeRequest]
     ) -> Optional[ErrorResponse]:
-        if request.model in self.served_model_names:
+        if self._is_model_supported(request.model):
             return None
         if request.model in [lora.lora_name for lora in self.lora_requests]:
             return None
@@ -135,12 +183,21 @@ class OpenAIServing:
             err_type="NotFoundError",
             status_code=HTTPStatus.NOT_FOUND)
 
+<<<<<<< HEAD
     def _maybe_get_lora(
         self, request: Union[CompletionRequest, ChatCompletionRequest,
                              EmbeddingRequest]
     ) -> Optional[LoRARequest]:
         if request.model in self.served_model_names:
             return None
+=======
+    def _maybe_get_adapters(
+        self, request: AnyRequest
+    ) -> Union[Tuple[None, None], Tuple[LoRARequest, None], Tuple[
+            None, PromptAdapterRequest]]:
+        if self._is_model_supported(request.model):
+            return None, None
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
         for lora in self.lora_requests:
             if request.model == lora.lora_name:
                 return lora
@@ -304,4 +361,10 @@ class OpenAIServing:
             if lora_request.lora_name != lora_name
         ]
         return f"Success: LoRA adapter '{lora_name}' removed successfully."
+<<<<<<< HEAD
 >>>>>>> db3bf7c9 ([Core] Support load and unload LoRA in api server (#6566))
+=======
+
+    def _is_model_supported(self, model_name):
+        return any(model.name == model_name for model in self.base_model_paths)
+>>>>>>> 260d40b5 ([Core] Support Lora lineage and base model metadata management (#6315))
