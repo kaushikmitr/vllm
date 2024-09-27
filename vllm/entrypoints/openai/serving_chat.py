@@ -18,11 +18,17 @@ from vllm.entrypoints.openai.protocol import (
     ChatCompletionMessageParam, ChatCompletionNamedToolChoiceParam,
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, DeltaMessage, ErrorResponse,
-    FunctionCall, ToolCall, UsageInfo)
-from vllm.entrypoints.openai.serving_engine import (LoRAModulePath,
-                                                    OpenAIServing)
-from vllm.inputs import PromptInputs
+    ChatCompletionStreamResponse, ChatMessage, DeltaFunctionCall, DeltaMessage,
+    DeltaToolCall, ErrorResponse, FunctionCall, ToolCall, UsageInfo)
+from vllm.entrypoints.openai.serving_engine import (BaseModelPath,
+                                                    LoRAModulePath,
+                                                    OpenAIServing,
+                                                    PromptAdapterPath,
+                                                    TextTokensPrompt)
+from vllm.entrypoints.openai.tool_parsers import (Hermes2ProToolParser,
+                                                  MistralToolParser,
+                                                  ToolParser)
+from vllm.inputs import TokensPrompt
 from vllm.logger import init_logger
 from vllm.model_executor.guided_decoding import (
     get_guided_decoding_logits_processor)
@@ -56,14 +62,17 @@ class OpenAIServingChat(OpenAIServing):
     def __init__(self,
                  engine: AsyncLLMEngine,
                  model_config: ModelConfig,
-                 served_model_names: List[str],
+                 base_model_paths: List[BaseModelPath],
                  response_role: str,
                  lora_modules: Optional[List[LoRAModulePath]] = None,
                  chat_template: Optional[str] = None):
         super().__init__(engine=engine,
                          model_config=model_config,
-                         served_model_names=served_model_names,
-                         lora_modules=lora_modules)
+                         base_model_paths=base_model_paths,
+                         lora_modules=lora_modules,
+                         prompt_adapters=prompt_adapters,
+                         request_logger=request_logger,
+                         return_tokens_as_token_ids=return_tokens_as_token_ids)
 
         self.response_role = response_role
         self._load_chat_template(chat_template)
@@ -308,7 +317,7 @@ class OpenAIServingChat(OpenAIServing):
             result_generator: AsyncIterator[RequestOutput], request_id: str,
             conversation: List[ConversationMessage]
     ) -> AsyncGenerator[str, None]:
-        model_name = request.model
+        model_name = self.base_model_paths[0].name
         created_time = int(time.time())
         chunk_object_type = "chat.completion.chunk"
         first_iteration = True
@@ -486,7 +495,7 @@ class OpenAIServingChat(OpenAIServing):
         conversation: List[ConversationMessage]
     ) -> Union[ErrorResponse, ChatCompletionResponse]:
 
-        model_name = request.model
+        model_name = self.base_model_paths[0].name
         created_time = int(time.time())
         final_res: Optional[RequestOutput] = None
         
